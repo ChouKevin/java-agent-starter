@@ -1,0 +1,122 @@
+x-runtime-logging: &runtime-logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "100m"
+      max-file: "5"
+
+services:
+  postgres:
+    <<: *runtime-logging
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_DB: ${POSTGRES_DB:-java_system_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    networks: [agent-network]
+
+  semantic-service:
+    <<: *runtime-logging
+    image: java-code-intelligence:uat
+    build:
+      context: ${STARTER_ROOT}/.runtime/sources/java-code-intelligence
+    ports:
+      - "${SEMANTIC_HOST_PORT:-8080}:8080"
+    environment:
+      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
+      GIT_USERNAME: ${GIT_USERNAME:-}
+      GIT_TOKEN: ${GIT_TOKEN:-}
+      JDTLS_MAX_ACTIVE_WORKSPACES: ${JDTLS_MAX_ACTIVE_WORKSPACES:-2}
+      REPOSITORY_SYNTAX_CACHE_MAXIMUM_WEIGHT: ${REPOSITORY_SYNTAX_CACHE_MAXIMUM_WEIGHT:-120000}
+      REPOSITORY_SYNTAX_CACHE_MAXIMUM_ENTRY_WEIGHT: ${REPOSITORY_SYNTAX_CACHE_MAXIMUM_ENTRY_WEIGHT:-60000}
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/semantic-repositories.yml
+    volumes:
+      - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
+      - ${STARTER_ROOT}/data/repositories:/data/repos
+      - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
+      - ${STARTER_ROOT}/logs/semantic:/app/logs
+    restart: unless-stopped
+    networks: [agent-network]
+
+  java-system-agent:
+    <<: *runtime-logging
+    image: java-system-agent:uat
+    build:
+      context: ${STARTER_ROOT}/.runtime/sources/java-system-agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+      semantic-service:
+        condition: service_started
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-agent-runtime}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-java_system_agent}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
+      CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080
+      CODEBASE_SERVICE_API_TOKEN: ${SEMANTIC_API_TOKEN}
+      SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
+      SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
+      SLACK_BOT_USER_ID: ${SLACK_BOT_USER_ID:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-poc-not-used}
+      GOOGLE_GENAI_MODEL: ${GOOGLE_GENAI_MODEL:-gemini-3.1-flash-lite}
+    volumes:
+      - ${STARTER_ROOT}/logs/agent:/app/logs
+    restart: unless-stopped
+    stop_grace_period: 45s
+    networks: [agent-network]
+
+  permissions-init:
+    <<: *runtime-logging
+    image: java-code-intelligence:uat
+    profiles: [setup]
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        chown -R 10001:10001 /data/repos /data/jdtls /app/agent-logs /app/semantic-logs &&
+        find /data/repos /data/jdtls -type d -exec chmod 0750 {} + &&
+        find /app/agent-logs /app/semantic-logs -type d -exec chmod 0755 {} + &&
+        find /app/agent-logs /app/semantic-logs -type f -exec chmod 0644 {} +
+    volumes:
+      - ${STARTER_ROOT}/data/repositories:/data/repos
+      - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
+      - ${STARTER_ROOT}/logs/agent:/app/agent-logs
+      - ${STARTER_ROOT}/logs/semantic:/app/semantic-logs
+    restart: "no"
+    networks: [agent-network]
+
+  network-probe:
+    <<: *runtime-logging
+    image: curlimages/curl:8.12.1
+    profiles: [tools]
+    depends_on:
+      semantic-service:
+        condition: service_started
+    environment:
+      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 120
+        --retry-connrefused --connect-timeout 5 --max-time 10
+        -H "X-Api-Token: $$SEMANTIC_API_TOKEN" http://semantic-service:8080/v1/repositories
+    restart: "no"
+    networks: [agent-network]
+
+volumes:
+  postgres-data:
+
+networks:
+  agent-network:
+    driver: bridge
+
