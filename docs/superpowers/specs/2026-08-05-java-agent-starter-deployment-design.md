@@ -193,7 +193,7 @@ repository: Semantic Service is unavailable
 run ./deploy.sh before repository operations
 ```
 
-`ensure` invokes the Semantic checkout API and reports repository ID, branch, revision, and whether a new clone occurred. `revision` reports the current revision needed by revision-pinned Semantic HTTP and MCP queries
+`ensure` invokes the Semantic checkout API and reports repository ID, branch, revision, and current clone state. The existing `cloned` field does not claim that cloning occurred during this specific request. `revision` reports the current revision needed by revision-pinned Semantic HTTP and MCP queries
 
 ## 10. Documentation
 
