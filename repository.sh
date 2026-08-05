@@ -21,6 +21,7 @@ env_value() {
 request() {
     local method="$1"
     local path="$2"
+    local body="${3:-}"
     local token
     local port
 
@@ -29,11 +30,21 @@ request() {
     port="$(env_value SEMANTIC_HOST_PORT)"
     [[ -n "${token}" ]] || fail "SEMANTIC_API_TOKEN is blank in ${ENV_FILE}"
     [[ -n "${port}" ]] || port=8080
-    curl --fail --silent --show-error \
-        --request "${method}" \
-        --header "X-Api-Token: ${token}" \
-        "http://127.0.0.1:${port}${path}" \
-        || fail "Semantic Service is unavailable or rejected the request; run ./deploy.sh and inspect logs"
+    if [[ -n "${body}" ]]; then
+        curl --fail --silent --show-error \
+            --request "${method}" \
+            --header "X-Api-Token: ${token}" \
+            --header "Content-Type: application/json" \
+            --data "${body}" \
+            "http://127.0.0.1:${port}${path}" \
+            || fail "Semantic Service is unavailable or rejected the request; run ./deploy.sh and inspect logs"
+    else
+        curl --fail --silent --show-error \
+            --request "${method}" \
+            --header "X-Api-Token: ${token}" \
+            "http://127.0.0.1:${port}${path}" \
+            || fail "Semantic Service is unavailable or rejected the request; run ./deploy.sh and inspect logs"
+    fi
     printf '\n'
 }
 
@@ -45,21 +56,40 @@ repo_id() {
     printf '%s' "${value}"
 }
 
-case "${1:-}" in
-    list)
-        [[ "$#" -eq 1 ]] || fail "usage: ./repository.sh list"
-        request GET /v1/repositories
-        ;;
-    ensure)
-        [[ "$#" -eq 2 ]] || fail "usage: ./repository.sh ensure <repoId>"
-        request POST "/v1/repositories/$(repo_id "$2")/ensure"
-        ;;
-    revision)
-        [[ "$#" -eq 2 ]] || fail "usage: ./repository.sh revision <repoId>"
-        request GET "/v1/repositories/$(repo_id "$2")"
-        ;;
-    *)
-        fail "usage: ./repository.sh {list|ensure|revision} [repoId]"
-        ;;
-esac
+revision_sha() {
+    local value="${1:-}"
 
+    [[ "${value}" =~ ^[0-9a-f]{40}$ ]] \
+        || fail "revisionSha must match ^[0-9a-f]{40}$"
+    printf '%s' "${value}"
+}
+
+main() {
+    case "${1:-}" in
+        list)
+            [[ "$#" -eq 1 ]] || fail "usage: ./repository.sh list"
+            request GET /v1/repositories
+            ;;
+        ensure)
+            [[ "$#" -eq 2 ]] || fail "usage: ./repository.sh ensure <repoId>"
+            request POST "/v1/repositories/$(repo_id "$2")/ensure"
+            ;;
+        revision)
+            [[ "$#" -eq 2 ]] || fail "usage: ./repository.sh revision <repoId>"
+            request GET "/v1/repositories/$(repo_id "$2")"
+            ;;
+        checkout)
+            [[ "$#" -eq 3 ]] || fail "usage: ./repository.sh checkout <repoId> <revisionSha>"
+            repo_id "$2" >/dev/null
+            revision_sha "$3" >/dev/null
+            request POST "/v1/repositories/$2/checkout" "{\"revision\":\"$3\"}"
+            ;;
+        *)
+            fail "usage: ./repository.sh {list|ensure|revision|checkout} [repoId]"
+            ;;
+    esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
