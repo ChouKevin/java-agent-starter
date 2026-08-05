@@ -74,6 +74,138 @@ sync_source() {
         || fail "${label} source contains commits not present on origin/${branch}"
 }
 
+compose_service_is_healthy() {
+    local state="$1"
+    local health="$2"
+
+    [[ "${state}" == "running" ]] \
+        && [[ -z "${health}" || "${health}" == "healthy" ]]
+}
+
+classify_compose_rows() {
+    local rows="$1"
+    local service
+    local state
+    local health
+    local postgres_state=""
+    local postgres_health=""
+    local semantic_state=""
+    local semantic_health=""
+    local agent_state=""
+    local agent_health=""
+
+    if [[ -z "${rows//[[:space:]]/}" ]]; then
+        printf 'ABSENT'
+        return
+    fi
+
+    while IFS='|' read -r service state health; do
+        case "${service}" in
+            postgres)
+                postgres_state="${state}"
+                postgres_health="${health}"
+                ;;
+            semantic-service)
+                semantic_state="${state}"
+                semantic_health="${health}"
+                ;;
+            java-system-agent)
+                agent_state="${state}"
+                agent_health="${health}"
+                ;;
+        esac
+    done <<< "${rows}"
+
+    if compose_service_is_healthy "${postgres_state}" "${postgres_health}" \
+        && compose_service_is_healthy "${semantic_state}" "${semantic_health}" \
+        && compose_service_is_healthy "${agent_state}" "${agent_health}"; then
+        printf 'ACTIVE_HEALTHY'
+    else
+        printf 'ACTIVE_DEGRADED'
+    fi
+}
+
+recorded_source_sha() {
+    local record_file="$1"
+    local source="$2"
+    local record_line
+
+    [[ -f "${record_file}" ]] || return 1
+    case "${source}" in
+        Agent|Semantic)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    record_line="$(grep -E -x "${source} source SHA: [0-9a-f]{40}" "${record_file}" || true)"
+    [[ -n "${record_line}" && "${record_line}" != *$'\n'* ]] || return 1
+    printf '%s' "${record_line##*: }"
+}
+
+deployment_record_matches_sources() {
+    local record_file="$1"
+    local agent_directory="$2"
+    local semantic_directory="$3"
+    local recorded_agent_sha
+    local recorded_semantic_sha
+    local agent_sha
+    local semantic_sha
+
+    [[ -e "${agent_directory}/.git" && -e "${semantic_directory}/.git" ]] || return 1
+    recorded_agent_sha="$(recorded_source_sha "${record_file}" Agent)" || return 1
+    recorded_semantic_sha="$(recorded_source_sha "${record_file}" Semantic)" || return 1
+    agent_sha="$(git -C "${agent_directory}" rev-parse HEAD 2>/dev/null)" || return 1
+    semantic_sha="$(git -C "${semantic_directory}" rev-parse HEAD 2>/dev/null)" || return 1
+    [[ "${recorded_agent_sha}" == "${agent_sha}" && "${recorded_semantic_sha}" == "${semantic_sha}" ]]
+}
+
+classify_active_deployment_state() {
+    local rows="$1"
+    local record_file="$2"
+    local agent_directory="$3"
+    local semantic_directory="$4"
+    local compose_state
+
+    compose_state="$(classify_compose_rows "${rows}")"
+    if [[ "${compose_state}" == "ACTIVE_HEALTHY" ]] \
+        && ! deployment_record_matches_sources \
+            "${record_file}" "${agent_directory}" "${semantic_directory}"; then
+        printf 'ACTIVE_INCONSISTENT'
+    else
+        printf '%s' "${compose_state}"
+    fi
+}
+
+preflight_active_deployment() {
+    local rows="$1"
+    local record_file="$2"
+    local agent_directory="$3"
+    local semantic_directory="$4"
+    local deployment_state
+
+    deployment_state="$(classify_active_deployment_state \
+        "${rows}" "${record_file}" "${agent_directory}" "${semantic_directory}")"
+    case "${deployment_state}" in
+        ABSENT)
+            printf 'deploy: no active UAT stack found; proceeding with first deployment\n'
+            ;;
+        ACTIVE_HEALTHY)
+            printf 'deploy: active UAT stack is healthy; continuing idempotent deployment\n'
+            ;;
+        ACTIVE_DEGRADED)
+            printf 'deploy: active UAT stack is degraded:\n%s\n' "${rows}" >&2
+            printf 'deploy: inspect logs with: docker compose --project-name java-agent-uat logs postgres semantic-service java-system-agent\n' >&2
+            return 1
+            ;;
+        ACTIVE_INCONSISTENT)
+            printf 'deploy: active UAT stack is inconsistent; inspect with: docker compose --project-name java-agent-uat ps --all\n' >&2
+            return 1
+            ;;
+    esac
+}
+
 prepare_host_paths() {
     local log_directory
 
@@ -106,6 +238,7 @@ main() {
     local semantic_url
     local semantic_ref
     local token
+    local compose_rows
     local -a compose
 
     command -v git >/dev/null 2>&1 || fail "git is required"
@@ -120,12 +253,19 @@ main() {
     semantic_url="$(env_or_default SEMANTIC_GIT_URL git@github.com:ChouKevin/java-code-intelligence.git)"
     semantic_ref="$(env_or_default SEMANTIC_GIT_REF uat)"
 
+    export STARTER_ROOT="${ROOT}"
+    compose=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
+    compose_rows="$("${compose[@]}" ps --all --format '{{.Service}}|{{.State}}|{{.Health}}')"
+    preflight_active_deployment \
+        "${compose_rows}" \
+        "${ROOT}/deployment-record.txt" \
+        "${SOURCES_DIR}/java-system-agent" \
+        "${SOURCES_DIR}/java-code-intelligence"
+
     prepare_host_paths
     sync_source "Java System Agent" "${agent_url}" "${agent_ref}" "${SOURCES_DIR}/java-system-agent"
     sync_source "Java Code Intelligence" "${semantic_url}" "${semantic_ref}" "${SOURCES_DIR}/java-code-intelligence"
 
-    export STARTER_ROOT="${ROOT}"
-    compose=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
     "${compose[@]}" build java-system-agent semantic-service
     "${compose[@]}" --profile setup run --rm permissions-init
     "${compose[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}"
@@ -134,4 +274,6 @@ main() {
     printf 'deploy: UAT stack started; see %s\n' "${ROOT}/deployment-record.txt"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi
