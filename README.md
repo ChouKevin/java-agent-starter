@@ -4,6 +4,9 @@ Single-host UAT/POC deployment for Java System Agent, Java Code Intelligence, an
 Clone this repository and run one script; the Starter clones both service repositories at their
 `uat` branches, builds the images, starts the stack, and verifies the private container connection.
 
+Cross-service delivery order and acceptance ownership are defined in
+[`docs/roadmap.md`](docs/roadmap.md).
+
 Only Java Code Intelligence publishes a host port (`8080` by default). PostgreSQL and Java System
 Agent remain on the private Docker network. This is plain HTTP for a trusted firewall/VPN only; do
 not expose it to an untrusted network without a separate TLS and security design.
@@ -75,4 +78,3 @@ Application logs are bind-mounted under `logs/`; Docker console logs use bounded
 rotation. Runtime clones, data, logs, `.env`, backups, and the deployment record are intentionally
 untracked. To test another service source, change its `*_GIT_URL` and `*_GIT_REF` values before the
 first deploy or remove only its clean checkout under `.runtime/sources/`.
-
