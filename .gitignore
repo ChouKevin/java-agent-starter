@@ -1,0 +1,7 @@
+.env
+.runtime/
+backups/
+data/
+deployment-record.txt
+logs/
+

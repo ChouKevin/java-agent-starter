@@ -1,0 +1,8 @@
+semantic:
+  repositories:
+    java-system-agent:
+      mode: REMOTE
+      display-name: Java System Agent
+      url: https://github.com/ChouKevin/java-system-agent.git
+      default-branch: uat
+
