@@ -4,5 +4,6 @@ backups/
 data/
 deployment-record.txt
 logs/
+reports/
 
 /docs/superpowers/
