@@ -69,7 +69,7 @@ Acceptance established on 2026-08-06 with `./contract-uat.sh`:
 - Semantic source: `6af36c585aacd68953c3aa621e66ceb45e743c7c`
 - Semantic MCP contract: 5 tests passed
 - Agent HTTP consumer contract: 2 tests passed
-- JUnit summary: `reports/contract-uat/20260806T020921Z-650974/summary.xml`
+- JUnit summary: `reports/contract-uat/20260806T022544Z-671410/summary.xml`
 
 ## M6: Agent Semantic Capability Expansion
 

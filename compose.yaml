@@ -137,10 +137,12 @@ services:
       - >-
         mvn --batch-mode --no-transfer-progress clean test -Dtest=McpLiveContractIT;
         status=$$?;
-        mkdir -p /reports/semantic;
-        find /workspace/target/surefire-reports -type f -name '*.xml' -exec cp {} /reports/semantic/ \; 2>/dev/null;
+        mkdir -p /reports/semantic &&
+        cp /workspace/target/surefire-reports/TEST-com.java.semantic.mcp.McpLiveContractIT.xml /reports/semantic/ &&
         chown -R "$$HOST_UID:$$HOST_GID" /reports;
-        exit $$status
+        report_status=$$?;
+        if [ "$$status" -ne 0 ]; then exit "$$status"; fi;
+        exit "$$report_status"
     volumes:
       - semantic-contract-workspace:/workspace
       - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/pom.xml:/workspace/pom.xml:ro
@@ -156,10 +158,12 @@ services:
       - >-
         mvn --batch-mode --no-transfer-progress clean test -Dtest=JavaSemanticServiceLiveContractIT;
         status=$$?;
-        mkdir -p /reports/agent;
-        find /workspace/target/surefire-reports -type f -name '*.xml' -exec cp {} /reports/agent/ \; 2>/dev/null;
+        mkdir -p /reports/agent &&
+        cp /workspace/target/surefire-reports/TEST-com.java.system.agent.codeintelligence.semantic.JavaSemanticServiceLiveContractIT.xml /reports/agent/ &&
         chown -R "$$HOST_UID:$$HOST_GID" /reports;
-        exit $$status
+        report_status=$$?;
+        if [ "$$status" -ne 0 ]; then exit "$$status"; fi;
+        exit "$$report_status"
     volumes:
       - agent-contract-workspace:/workspace
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro

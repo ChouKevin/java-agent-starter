@@ -41,6 +41,11 @@ grep -Fq 'agent-contract-workspace:/workspace' "${ROOT}/compose.yaml"
 ! grep -Fq 'contract-target:/workspace/target' "${ROOT}/compose.yaml"
 grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=McpLiveContractIT' "${ROOT}/compose.yaml"
 grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=JavaSemanticServiceLiveContractIT' "${ROOT}/compose.yaml"
+grep -Fq 'TEST-com.java.semantic.mcp.McpLiveContractIT.xml' "${ROOT}/compose.yaml"
+grep -Fq 'TEST-com.java.system.agent.codeintelligence.semantic.JavaSemanticServiceLiveContractIT.xml' \
+    "${ROOT}/compose.yaml"
+[[ "$(grep -Fc 'report_status=$$?' "${ROOT}/compose.yaml")" -eq 2 ]]
+[[ "$(grep -Fc 'if [ "$$status" -ne 0 ]; then exit "$$status"; fi' "${ROOT}/compose.yaml")" -eq 2 ]]
 grep -Fq 'run --rm "${service}"' "${ROOT}/contract-uat.sh"
 grep -Fq 'reports/contract-uat/${RUN_ID}' "${ROOT}/contract-uat.sh"
 grep -Fxq 'reports/' "${ROOT}/.gitignore"
