@@ -142,9 +142,9 @@ services:
         chown -R "$$HOST_UID:$$HOST_GID" /reports;
         exit $$status
     volumes:
+      - semantic-contract-workspace:/workspace
       - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/pom.xml:/workspace/pom.xml:ro
       - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/src:/workspace/src:ro
-      - semantic-contract-target:/workspace/target
       - maven-cache:/root/.m2
       - ${STARTER_ROOT}/reports/contract-uat/${M5_RUN_ID}:/reports
 
@@ -161,16 +161,16 @@ services:
         chown -R "$$HOST_UID:$$HOST_GID" /reports;
         exit $$status
     volumes:
+      - agent-contract-workspace:/workspace
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro
-      - agent-contract-target:/workspace/target
       - maven-cache:/root/.m2
       - ${STARTER_ROOT}/reports/contract-uat/${M5_RUN_ID}:/reports
 
 volumes:
   postgres-data:
-  semantic-contract-target:
-  agent-contract-target:
+  semantic-contract-workspace:
+  agent-contract-workspace:
   maven-cache:
 
 networks:

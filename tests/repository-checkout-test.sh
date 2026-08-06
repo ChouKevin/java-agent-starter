@@ -90,6 +90,22 @@ assert_curl_arguments "list" \
     'X-Api-Token: test-token' \
     'http://127.0.0.1:18080/v1/repositories'
 
+CURL_MARKER="${TEMPORARY_DIRECTORY}/curl-sync"
+main sync java-system-agent
+assert_curl_arguments "sync" \
+    --fail \
+    --silent \
+    --show-error \
+    --request \
+    POST \
+    --header \
+    'X-Api-Token: test-token' \
+    --header \
+    'Content-Type: application/json' \
+    --data \
+    '{}' \
+    'http://127.0.0.1:18080/v1/repositories/java-system-agent/sync'
+
 assert_checkout_fails_without_curl "invalid-repository" JAVA_SYSTEM_AGENT "${REVISION_SHA}"
 assert_checkout_fails_without_curl "uppercase-revision" java-system-agent 0123456789ABCDEF0123456789ABCDEF01234567
 assert_checkout_fails_without_curl "short-revision" java-system-agent 0123456789abcdef0123456789abcdef0123456

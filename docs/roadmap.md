@@ -36,7 +36,7 @@ Acceptance already established:
 
 ## M5: Cross-Service Contract Baseline
 
-**Status:** Next
+**Status:** Complete
 
 Build an executable Starter-owned contract UAT that proves a selected pair of service revisions can
 interoperate before capability expansion begins.
@@ -63,9 +63,17 @@ Starter must not copy complete JSON schemas into a third contract model.
 M5 is accepted when incompatible service revisions fail before an Agent knowledge-query scenario,
 while a compatible pair passes the same revision-pinned HTTP/MCP contract suite.
 
+Acceptance established on 2026-08-06 with `./contract-uat.sh`:
+
+- Agent source and fixture: `dc8d25acd32a0e52edcb8f0e5e9a0dbc1244fff7`
+- Semantic source: `6af36c585aacd68953c3aa621e66ceb45e743c7c`
+- Semantic MCP contract: 5 tests passed
+- Agent HTTP consumer contract: 2 tests passed
+- JUnit summary: `reports/contract-uat/20260806T020921Z-650974/summary.xml`
+
 ## M6: Agent Semantic Capability Expansion
 
-**Status:** Planned
+**Status:** Next
 
 Expose the newer Semantic discovery and navigation capabilities as Agent `QUERY` planning tools.
 The initial scope includes source-symbol resolution, source-segment retrieval, internal source

@@ -94,6 +94,27 @@ grep -Fq '<testsuite name="contract-uat" tests="3" failures="1" skipped="0">' \
     "${RUN_DIRECTORY}/summary.xml"
 grep -Fq '<failure message="agent-http contract failed"/>' "${RUN_DIRECTORY}/summary.xml"
 
+PIN_FIXTURE_ROOT="${TEMPORARY_DIRECTORY}/pin-fixture"
+PIN_FIXTURE_INVOCATIONS="${TEMPORARY_DIRECTORY}/pin-fixture-invocations"
+mkdir -p "${PIN_FIXTURE_ROOT}"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'printf "%s\n" "$*" >> "${PIN_FIXTURE_INVOCATIONS}"' \
+    'if [[ "$1" == "revision" ]]; then' \
+    '    printf "{\"repoId\":\"java-system-agent\",\"currentRevision\":\"%s\"}\n" "${PIN_FIXTURE_SHA}"' \
+    'fi' > "${PIN_FIXTURE_ROOT}/repository.sh"
+chmod +x "${PIN_FIXTURE_ROOT}/repository.sh"
+export PIN_FIXTURE_INVOCATIONS PIN_FIXTURE_SHA="${AGENT_TEST_SHA}"
+ORIGINAL_ROOT="${ROOT}"
+ROOT="${PIN_FIXTURE_ROOT}"
+AGENT_SHA="${AGENT_TEST_SHA}"
+pin_fixture
+ROOT="${ORIGINAL_ROOT}"
+assert_equals $'ensure java-system-agent\nsync java-system-agent\ncheckout java-system-agent 1111111111111111111111111111111111111111\nrevision java-system-agent' \
+    "$(cat "${PIN_FIXTURE_INVOCATIONS}")" \
+    "fixture must fetch before exact checkout"
+assert_equals "${AGENT_TEST_SHA}" "${FIXTURE_SHA}" "pinned fixture SHA"
+
 INVOCATIONS="${TEMPORARY_DIRECTORY}/invocations"
 
 create_run_directory() {

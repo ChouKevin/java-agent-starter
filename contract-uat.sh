@@ -137,6 +137,7 @@ pin_fixture() {
     local repository_sha
 
     "${ROOT}/repository.sh" ensure java-system-agent
+    "${ROOT}/repository.sh" sync java-system-agent
     "${ROOT}/repository.sh" checkout java-system-agent "${AGENT_SHA}"
     repository_response="$("${ROOT}/repository.sh" revision java-system-agent)"
     repository_sha="$(repository_revision "${repository_response}")"

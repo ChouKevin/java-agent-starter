@@ -78,6 +78,10 @@ main() {
             [[ "$#" -eq 2 ]] || fail "usage: ./repository.sh revision <repoId>"
             request GET "/v1/repositories/$(repo_id "$2")"
             ;;
+        sync)
+            [[ "$#" -eq 2 ]] || fail "usage: ./repository.sh sync <repoId>"
+            request POST "/v1/repositories/$(repo_id "$2")/sync" '{}'
+            ;;
         checkout)
             [[ "$#" -eq 3 ]] || fail "usage: ./repository.sh checkout <repoId> <revisionSha>"
             repo_id "$2" >/dev/null
@@ -85,7 +89,7 @@ main() {
             request POST "/v1/repositories/$2/checkout" "{\"revision\":\"$3\"}"
             ;;
         *)
-            fail "usage: ./repository.sh {list|ensure|revision|checkout} [repoId]"
+            fail "usage: ./repository.sh {list|ensure|revision|sync|checkout} [repoId]"
             ;;
     esac
 }
