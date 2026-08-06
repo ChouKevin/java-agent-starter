@@ -5,6 +5,22 @@ x-runtime-logging: &runtime-logging
       max-size: "100m"
       max-file: "5"
 
+x-contract-runner: &contract-runner
+  image: maven:3.9.11-eclipse-temurin-21
+  profiles: [contract]
+  depends_on:
+    semantic-service:
+      condition: service_started
+  environment:
+    M5_SEMANTIC_BASE_URL: http://semantic-service:8080
+    M5_SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
+    M5_REPO_ID: ${M5_REPO_ID:-java-system-agent}
+    M5_EXPECTED_REVISION: ${M5_EXPECTED_REVISION:-}
+    HOST_UID: ${HOST_UID:-1000}
+    HOST_GID: ${HOST_GID:-1000}
+  restart: "no"
+  networks: [agent-network]
+
 services:
   postgres:
     <<: *runtime-logging
@@ -113,10 +129,50 @@ services:
     restart: "no"
     networks: [agent-network]
 
+  semantic-contract:
+    <<: *contract-runner
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mvn --batch-mode --no-transfer-progress clean test -Dtest=McpLiveContractIT;
+        status=$$?;
+        mkdir -p /reports/semantic;
+        find /workspace/target/surefire-reports -type f -name '*.xml' -exec cp {} /reports/semantic/ \; 2>/dev/null;
+        chown -R "$$HOST_UID:$$HOST_GID" /reports;
+        exit $$status
+    volumes:
+      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/pom.xml:/workspace/pom.xml:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/src:/workspace/src:ro
+      - semantic-contract-target:/workspace/target
+      - maven-cache:/root/.m2
+      - ${STARTER_ROOT}/reports/contract-uat/${M5_RUN_ID}:/reports
+
+  agent-contract:
+    <<: *contract-runner
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mvn --batch-mode --no-transfer-progress clean test -Dtest=JavaSemanticServiceLiveContractIT;
+        status=$$?;
+        mkdir -p /reports/agent;
+        find /workspace/target/surefire-reports -type f -name '*.xml' -exec cp {} /reports/agent/ \; 2>/dev/null;
+        chown -R "$$HOST_UID:$$HOST_GID" /reports;
+        exit $$status
+    volumes:
+      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro
+      - agent-contract-target:/workspace/target
+      - maven-cache:/root/.m2
+      - ${STARTER_ROOT}/reports/contract-uat/${M5_RUN_ID}:/reports
+
 volumes:
   postgres-data:
+  semantic-contract-target:
+  agent-contract-target:
+  maven-cache:
 
 networks:
   agent-network:
     driver: bridge
-
