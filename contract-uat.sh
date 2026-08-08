@@ -7,7 +7,8 @@ RUN_ID=""
 RUN_DIRECTORY=""
 AGENT_SHA=""
 SEMANTIC_SHA=""
-FIXTURE_SHA=""
+AGENT_FIXTURE_SHA=""
+DISCOVERY_FIXTURE_REVISION=""
 
 fail() {
     printf 'contract-uat: %s\n' "$*" >&2
@@ -60,8 +61,9 @@ write_manifest() {
         printf 'runId=%s\n' "${RUN_ID}"
         printf 'agentSourceSha=%s\n' "${AGENT_SHA}"
         printf 'semanticSourceSha=%s\n' "${SEMANTIC_SHA}"
-        printf 'repositoryId=java-system-agent\n'
-        printf 'fixtureSha=%s\n' "${FIXTURE_SHA}"
+        printf 'agentFixtureSha=%s\n' "${AGENT_FIXTURE_SHA}"
+        printf 'discoveryFixtureId=m6-semantic-contract\n'
+        printf 'discoveryFixtureRevision=%s\n' "${DISCOVERY_FIXTURE_REVISION}"
     } > "${RUN_DIRECTORY}/manifest.txt"
 }
 
@@ -114,7 +116,10 @@ write_summary_junit() {
         printf '    <property name="runId" value="%s"/>\n' "${RUN_ID}"
         printf '    <property name="agentSha" value="%s"/>\n' "${AGENT_SHA}"
         printf '    <property name="semanticSha" value="%s"/>\n' "${SEMANTIC_SHA}"
-        printf '    <property name="fixtureSha" value="%s"/>\n' "${FIXTURE_SHA}"
+        printf '    <property name="agentFixtureSha" value="%s"/>\n' "${AGENT_FIXTURE_SHA}"
+        printf '    <property name="discoveryFixtureId" value="m6-semantic-contract"/>\n'
+        printf '    <property name="discoveryFixtureRevision" value="%s"/>\n' \
+            "${DISCOVERY_FIXTURE_REVISION}"
         printf '  </properties>\n'
         write_testcase fixture PASS
         write_testcase semantic-mcp "${semantic_status}"
@@ -132,7 +137,7 @@ read_deployed_revisions() {
     SEMANTIC_SHA="$(deployment_sha 'Semantic source SHA')"
 }
 
-pin_fixture() {
+pin_agent_fixture() {
     local repository_response
     local repository_sha
 
@@ -143,13 +148,25 @@ pin_fixture() {
     repository_sha="$(repository_revision "${repository_response}")"
     [[ "${repository_sha}" == "${AGENT_SHA}" ]] \
         || fail "fixture revision mismatch: expected ${AGENT_SHA}, found ${repository_sha}"
-    FIXTURE_SHA="${repository_sha}"
+    AGENT_FIXTURE_SHA="${repository_sha}"
+}
+
+ensure_discovery_fixture() {
+    local response
+
+    "${ROOT}/repository.sh" ensure m6-semantic-contract
+    response="$("${ROOT}/repository.sh" revision m6-semantic-contract)"
+    [[ "${response}" == *'"currentRevision":"FIXTURE"'* ]] \
+        || fail "discovery fixture revision must be FIXTURE"
+    DISCOVERY_FIXTURE_REVISION=FIXTURE
 }
 
 prepare_contract_environment() {
-    export M5_REPO_ID=java-system-agent
-    export M5_EXPECTED_REVISION="${AGENT_SHA}"
-    export M5_RUN_ID="${RUN_ID}"
+    export M6_AGENT_REPO_ID=java-system-agent
+    export M6_AGENT_EXPECTED_REVISION="${AGENT_SHA}"
+    export M6_DISCOVERY_REPO_ID=m6-semantic-contract
+    export M6_DISCOVERY_EXPECTED_REVISION="${DISCOVERY_FIXTURE_REVISION}"
+    export M6_RUN_ID="${RUN_ID}"
     export HOST_UID="$(id -u)"
     export HOST_GID="$(id -g)"
     export STARTER_ROOT="${ROOT}"
@@ -181,8 +198,9 @@ run_contract_phase() {
 print_failure_context() {
     local phase="$1"
 
-    printf 'contract-uat: FAIL phase=%s agent=%s semantic=%s fixture=%s report=%s\n' \
-        "${phase}" "${AGENT_SHA}" "${SEMANTIC_SHA}" "${FIXTURE_SHA}" "${RUN_DIRECTORY}" >&2
+    printf 'contract-uat: FAIL phase=%s agent=%s semantic=%s agentFixture=%s discoveryFixture=%s report=%s\n' \
+        "${phase}" "${AGENT_SHA}" "${SEMANTIC_SHA}" "${AGENT_FIXTURE_SHA}" \
+        "${DISCOVERY_FIXTURE_REVISION}" "${RUN_DIRECTORY}" >&2
     printf '%s\n' \
         'docker compose --project-name java-agent-uat --env-file .env -f compose.yaml logs semantic-service' \
         'docker compose --project-name java-agent-uat --env-file .env -f compose.yaml logs java-system-agent' >&2
@@ -212,7 +230,8 @@ main() {
         return 1
     fi
     read_deployed_revisions
-    pin_fixture
+    pin_agent_fixture
+    ensure_discovery_fixture
     write_manifest
     prepare_contract_environment
 
@@ -224,8 +243,9 @@ main() {
     fi
 
     write_summary_junit PASS PASS
-    printf 'contract-uat: PASS agent=%s semantic=%s fixture=%s report=%s\n' \
-        "${AGENT_SHA}" "${SEMANTIC_SHA}" "${FIXTURE_SHA}" "${RUN_DIRECTORY}"
+    printf 'contract-uat: PASS agent=%s semantic=%s fixture=%s discoveryFixture=%s report=%s\n' \
+        "${AGENT_SHA}" "${SEMANTIC_SHA}" "${AGENT_FIXTURE_SHA}" \
+        "${DISCOVERY_FIXTURE_REVISION}" "${RUN_DIRECTORY}"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

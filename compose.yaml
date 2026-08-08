@@ -12,10 +12,12 @@ x-contract-runner: &contract-runner
     semantic-service:
       condition: service_started
   environment:
-    M5_SEMANTIC_BASE_URL: http://semantic-service:8080
-    M5_SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
-    M5_REPO_ID: ${M5_REPO_ID:-java-system-agent}
-    M5_EXPECTED_REVISION: ${M5_EXPECTED_REVISION:-}
+    M6_SEMANTIC_BASE_URL: http://semantic-service:8080
+    M6_SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
+    M6_AGENT_REPO_ID: ${M6_AGENT_REPO_ID:-java-system-agent}
+    M6_AGENT_EXPECTED_REVISION: ${M6_AGENT_EXPECTED_REVISION:-}
+    M6_DISCOVERY_REPO_ID: ${M6_DISCOVERY_REPO_ID:-m6-semantic-contract}
+    M6_DISCOVERY_EXPECTED_REVISION: ${M6_DISCOVERY_EXPECTED_REVISION:-FIXTURE}
     HOST_UID: ${HOST_UID:-1000}
     HOST_GID: ${HOST_GID:-1000}
   restart: "no"
@@ -57,6 +59,7 @@ services:
       SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/semantic-repositories.yml
     volumes:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m6-semantic-contract:/fixtures/m6-semantic-contract:ro
       - ${STARTER_ROOT}/data/repositories:/data/repos
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
       - ${STARTER_ROOT}/logs/semantic:/app/logs
@@ -148,7 +151,7 @@ services:
       - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/pom.xml:/workspace/pom.xml:ro
       - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/src:/workspace/src:ro
       - maven-cache:/root/.m2
-      - ${STARTER_ROOT}/reports/contract-uat/${M5_RUN_ID}:/reports
+      - ${STARTER_ROOT}/reports/contract-uat/${M6_RUN_ID}:/reports
 
   agent-contract:
     <<: *contract-runner
@@ -169,7 +172,7 @@ services:
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro
       - maven-cache:/root/.m2
-      - ${STARTER_ROOT}/reports/contract-uat/${M5_RUN_ID}:/reports
+      - ${STARTER_ROOT}/reports/contract-uat/${M6_RUN_ID}:/reports
 
 volumes:
   postgres-data:

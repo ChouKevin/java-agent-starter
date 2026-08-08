@@ -5,4 +5,7 @@ semantic:
       display-name: Java System Agent
       url: https://github.com/ChouKevin/java-system-agent.git
       default-branch: uat
-
+    m6-semantic-contract:
+      mode: LOCAL_FIXTURE
+      display-name: M6 Semantic Contract Fixture
+      path: /fixtures/m6-semantic-contract
