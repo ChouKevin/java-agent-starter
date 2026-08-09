@@ -121,6 +121,7 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
+        find /fixtures/m7-knowledge-query -mindepth 1 -delete &&
         cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/ &&
         chown -R 10001:10001 /fixtures/m7-knowledge-query
     volumes:

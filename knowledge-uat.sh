@@ -11,7 +11,6 @@ AGENT_SHA=""
 SEMANTIC_SHA=""
 GOOGLE_MODEL=""
 FIXTURE_REVISION=""
-LIVE_BUDGET_HANDLE_COUNT=1
 
 fail() {
     printf 'knowledge-uat: %s\n' "$*" >&2
@@ -26,6 +25,16 @@ env_value() {
     printf '%s' "${line#*=}"
 }
 
+operator_value() {
+    local key="$1"
+
+    if [[ -v "${key}" ]]; then
+        printf '%s' "${!key}"
+    else
+        env_value "${key}"
+    fi
+}
+
 preflight() {
     [[ -s "${ENV_FILE}" ]] || fail "${ENV_FILE} is missing; run ./deploy.sh and configure GOOGLE_API_KEY"
 }
@@ -34,16 +43,17 @@ read_live_configuration() {
     local api_key
     local normalized_key
 
-    api_key="$(env_value GOOGLE_API_KEY)"
+    api_key="$(operator_value GOOGLE_API_KEY)"
     normalized_key="$(tr '[:upper:]' '[:lower:]' <<< "${api_key}")"
-    [[ -n "${api_key}" ]] || fail "GOOGLE_API_KEY must be configured for a live M7 run"
+    [[ -n "${api_key//[[:space:]]/}" ]] \
+        || fail "GOOGLE_API_KEY must be configured for a live M7 run"
     case "${normalized_key}" in
-        poc-*|example|replace-me|your-google-api-key|changeme)
+        poc-*|example|example-*|replace-me|replace-*|your-*|changeme|change-me|test-*|fake-*|dummy-*)
             fail "GOOGLE_API_KEY must be a live provider credential, not a placeholder"
             ;;
     esac
 
-    GOOGLE_MODEL="$(env_value GOOGLE_GENAI_MODEL)"
+    GOOGLE_MODEL="$(operator_value GOOGLE_GENAI_MODEL)"
     [[ -n "${GOOGLE_MODEL}" ]] || GOOGLE_MODEL=gemini-3.1-flash-lite
     [[ "${GOOGLE_MODEL}" =~ ^[A-Za-z0-9._:-]+$ ]] \
         || fail "GOOGLE_GENAI_MODEL contains unsupported characters"
@@ -87,7 +97,44 @@ create_run_directory() {
 }
 
 deploy_stack() {
-    "${ROOT}/deploy.sh"
+    local deployment_state
+
+    deployment_state="$(active_deployment_state)"
+    case "${deployment_state}" in
+        ABSENT)
+            "${ROOT}/deploy.sh"
+            ;;
+        ACTIVE_HEALTHY)
+            printf 'knowledge-uat: active UAT stack is healthy; reusing exact deployment\n'
+            ;;
+        ACTIVE_DEGRADED|ACTIVE_INCONSISTENT)
+            fail "active UAT stack is ${deployment_state#ACTIVE_}; refusing to mutate it"
+            ;;
+        *)
+            fail "unsupported active deployment state: ${deployment_state}"
+            ;;
+    esac
+}
+
+active_deployment_state() {
+    local rows
+
+    export STARTER_ROOT="${ROOT}"
+    rows="$(docker compose \
+        --project-name java-agent-uat \
+        --env-file "${ENV_FILE}" \
+        -f "${ROOT}/compose.yaml" \
+        ps --all --format '{{.Service}}|{{.State}}|{{.Health}}')" \
+        || fail "could not inspect the active UAT stack"
+    bash -c '
+        source "$1"
+        classify_active_deployment_state "$2" "$3" "$4" "$5"
+    ' bash \
+        "${ROOT}/deploy.sh" \
+        "${rows}" \
+        "${ROOT}/deployment-record.txt" \
+        "${ROOT}/.runtime/sources/java-system-agent" \
+        "${ROOT}/.runtime/sources/java-code-intelligence"
 }
 
 read_deployed_revisions() {
@@ -138,27 +185,32 @@ run_live_scenario() {
         --env-file "${ENV_FILE}" \
         -f "${ROOT}/compose.yaml" \
         --profile knowledge \
-        run --rm agent-knowledge
-}
-
-require_junit_attribute() {
-    local attribute="$1"
-    local expected="$2"
-    local matches
-
-    matches="$(grep -oE "[[:space:]]${attribute}=\"${expected}\"" "${RUN_DIRECTORY}/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml" || true)"
-    [[ -n "${matches}" && "${matches}" != *$'\n'* ]] \
-        || fail "M7 JUnit must contain exactly one ${attribute}=${expected}"
+        run --rm --no-deps agent-knowledge
 }
 
 validate_junit() {
     local junit_file="${RUN_DIRECTORY}/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml"
 
     [[ -f "${junit_file}" ]] || fail "M7 JUnit report is missing: ${junit_file}"
-    require_junit_attribute tests 1
-    require_junit_attribute failures 0
-    require_junit_attribute errors 0
-    require_junit_attribute skipped 0
+    command -v python3 >/dev/null 2>&1 || fail "python3 is required to validate the M7 JUnit report"
+    if ! python3 - "${junit_file}" <<'PY'
+import sys
+import xml.etree.ElementTree as element_tree
+
+try:
+    root = element_tree.parse(sys.argv[1]).getroot()
+except element_tree.ParseError:
+    sys.exit(1)
+
+if root.tag != "testsuite":
+    sys.exit(1)
+
+expected_attributes = {"tests": "1", "failures": "0", "errors": "0", "skipped": "0"}
+sys.exit(0 if all(root.attrib.get(key) == value for key, value in expected_attributes.items()) else 1)
+PY
+    then
+        fail "M7 JUnit testsuite must be exactly tests=1 failures=0 errors=0 skipped=0"
+    fi
 }
 
 write_manifest() {
@@ -170,7 +222,6 @@ write_manifest() {
         printf 'fixtureId=m7-knowledge-query\n'
         printf 'fixtureRevision=%s\n' "${FIXTURE_REVISION}"
         printf 'model=%s\n' "${GOOGLE_MODEL}"
-        printf 'budgetHandleCount=%s\n' "${LIVE_BUDGET_HANDLE_COUNT}"
     } > "${RUN_DIRECTORY}/manifest.txt"
 }
 

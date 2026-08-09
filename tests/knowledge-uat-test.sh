@@ -32,7 +32,7 @@ assert_fails() {
 }
 
 bash -n "${ROOT}/knowledge-uat.sh"
-bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory read_deployed_revisions fixture_revision ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
+bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory read_deployed_revisions active_deployment_state fixture_revision ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
     bash "${ROOT}/knowledge-uat.sh"
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/knowledge-uat.sh"
 grep -Fq 'gemini-3.1-flash-lite' "${ROOT}/knowledge-uat.sh"
@@ -41,7 +41,7 @@ grep -Fq '"${ROOT}/deploy.sh"' "${ROOT}/knowledge-uat.sh"
 grep -Fq 'repository.sh" ensure m7-knowledge-query' "${ROOT}/knowledge-uat.sh"
 ! rg -q 'SLACK_' "${ROOT}/knowledge-uat.sh"
 ! rg -q '^[[:space:]]*(while|for)[[:space:]]' "${ROOT}/knowledge-uat.sh"
-[[ "$(grep -Fc 'run --rm agent-knowledge' "${ROOT}/knowledge-uat.sh")" -eq 1 ]]
+[[ "$(grep -Fc 'run --rm --no-deps agent-knowledge' "${ROOT}/knowledge-uat.sh")" -eq 1 ]]
 
 source "${ROOT}/knowledge-uat.sh"
 
@@ -55,16 +55,41 @@ printf 'GOOGLE_API_KEY=\n' > "${TEST_ROOT}/.env"
 ORIGINAL_ROOT="${ROOT}"
 ROOT="${TEST_ROOT}"
 ENV_FILE="${TEST_ROOT}/.env"
+unset GOOGLE_API_KEY GOOGLE_GENAI_MODEL
 preflight
 assert_fails "blank API key fails before Docker or deployment" read_live_configuration
+printf 'GOOGLE_API_KEY=   \n' > "${TEST_ROOT}/.env"
+assert_fails "whitespace-only API key fails before Docker or deployment" read_live_configuration
 printf 'GOOGLE_API_KEY=poc-not-used\n' > "${TEST_ROOT}/.env"
 assert_fails "placeholder API key fails before Docker or deployment" read_live_configuration
+printf 'GOOGLE_API_KEY=example-key\n' > "${TEST_ROOT}/.env"
+assert_fails "common placeholder API key fails before Docker or deployment" read_live_configuration
 printf 'GOOGLE_API_KEY=live-key\nGOOGLE_GENAI_MODEL=custom-model\n' > "${TEST_ROOT}/.env"
 read_live_configuration
 assert_equals custom-model "${GOOGLE_MODEL}" "configured live model"
+export GOOGLE_API_KEY=process-live-key
+export GOOGLE_GENAI_MODEL=process-model
+read_live_configuration
+assert_equals process-model "${GOOGLE_MODEL}" "process environment overrides .env model"
+unset GOOGLE_API_KEY GOOGLE_GENAI_MODEL
 printf 'GOOGLE_API_KEY=live-key\n' > "${TEST_ROOT}/.env"
 read_live_configuration
 assert_equals gemini-3.1-flash-lite "${GOOGLE_MODEL}" "default live model"
+CONFIG_DEPLOY_INVOCATIONS="${TEMPORARY_DIRECTORY}/configuration-deploy-invocations"
+deploy_stack() {
+    printf 'deploy\n' >> "${CONFIG_DEPLOY_INVOCATIONS}"
+}
+unset GOOGLE_API_KEY GOOGLE_GENAI_MODEL
+printf 'GOOGLE_API_KEY=example-key\n' > "${TEST_ROOT}/.env"
+assert_fails "placeholder API key stops main before deployment" main
+[[ ! -e "${CONFIG_DEPLOY_INVOCATIONS}" ]] || {
+    printf 'placeholder API key reached deployment\n' >&2
+    exit 1
+}
+printf 'GOOGLE_API_KEY=live-key\n' > "${TEST_ROOT}/.env"
+source "${ORIGINAL_ROOT}/knowledge-uat.sh"
+ROOT="${TEST_ROOT}"
+ENV_FILE="${TEST_ROOT}/.env"
 assert_equals FIXTURE "$(fixture_revision '{"currentRevision":"FIXTURE"}')" "exact fixture revision"
 assert_fails "duplicate fixture revisions are rejected" fixture_revision \
     '{"currentRevision":"FIXTURE","nested":{"currentRevision":"FIXTURE"}}'
@@ -85,7 +110,7 @@ grep -Fq "semanticSourceSha=${SEMANTIC_SHA}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq 'fixtureId=m7-knowledge-query' "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq 'fixtureRevision=FIXTURE' "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq "model=${GOOGLE_MODEL}" "${RUN_DIRECTORY}/manifest.txt"
-grep -Fq 'budgetHandleCount=1' "${RUN_DIRECTORY}/manifest.txt"
+! rg -q 'budgetHandleCount' "${RUN_DIRECTORY}/manifest.txt"
 ! rg -qi 'key|token|prompt|evidence|reason|environment' "${RUN_DIRECTORY}/manifest.txt"
 
 JUNIT_FILE="${RUN_DIRECTORY}/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml"
@@ -93,6 +118,28 @@ printf '<testsuite tests="1" failures="0" errors="0" skipped="0"/>\n' > "${JUNIT
 validate_junit
 printf '<testsuite tests="1" failures="0" errors="0" skipped="1"/>\n' > "${JUNIT_FILE}"
 assert_fails "skipped JUnit test fails the run" validate_junit
+printf '<testsuite tests="1" failures="0" errors="0"><properties><property skipped="0"/></properties></testsuite>\n' > "${JUNIT_FILE}"
+assert_fails "JUnit decoy attributes outside the testsuite root fail the run" validate_junit
+
+DEPLOY_INVOCATIONS="${TEMPORARY_DIRECTORY}/deploy-invocations"
+printf '#!/usr/bin/env bash\nprintf deploy >> "%s"\n' "${DEPLOY_INVOCATIONS}" > "${TEST_ROOT}/deploy.sh"
+chmod +x "${TEST_ROOT}/deploy.sh"
+active_deployment_state() {
+    printf '%s' "${TEST_DEPLOYMENT_STATE}"
+}
+TEST_DEPLOYMENT_STATE=ACTIVE_HEALTHY
+deploy_stack
+[[ ! -e "${DEPLOY_INVOCATIONS}" ]] || {
+    printf 'healthy deployment must not invoke deploy.sh\n' >&2
+    exit 1
+}
+TEST_DEPLOYMENT_STATE=ABSENT
+deploy_stack
+assert_equals deploy "$(cat "${DEPLOY_INVOCATIONS}")" "absent deployment invokes deploy.sh"
+TEST_DEPLOYMENT_STATE=ACTIVE_DEGRADED
+assert_fails "degraded deployment fails closed" deploy_stack
+TEST_DEPLOYMENT_STATE=ACTIVE_INCONSISTENT
+assert_fails "inconsistent deployment fails closed" deploy_stack
 
 INVOCATIONS="${TEMPORARY_DIRECTORY}/invocations"
 preflight() {
@@ -138,4 +185,5 @@ assert_equals $'preflight\nreport-directory\ndeploy\nrevisions\nfixture-db\nmani
 
 ROOT="${ORIGINAL_ROOT}"
 ENV_FILE="${ROOT}/.env"
+unset GOOGLE_API_KEY GOOGLE_GENAI_MODEL
 printf 'knowledge UAT tests passed\n'
