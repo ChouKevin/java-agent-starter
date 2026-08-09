@@ -28,6 +28,13 @@ runs an authenticated Semantic API probe, and writes exact source SHAs to
 `deployment-record.txt`. Later runs accept only clean checkouts on the configured branch and update
 them by fast-forward; they never reset, rebase, overwrite, or discard local work.
 
+## M6 contract gate
+
+Run `./contract-uat.sh` to deploy the selected service revisions and execute the revision-pinned
+Semantic MCP and Agent HTTP contracts. The gate checks the selected Agent repository revision plus
+the `m6-semantic-contract` local fixture and writes its manifest and JUnit reports under
+`reports/contract-uat/<run-id>/`.
+
 Set `SPRING_PROFILES_ACTIVE=slack-agent` and the Slack/model values in `.env` only when exercising
 the complete Slack Agent. Slack Socket Mode is outbound, so Java System Agent still needs no
 published inbound port.

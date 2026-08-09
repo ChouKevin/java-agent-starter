@@ -73,12 +73,21 @@ Acceptance established on 2026-08-06 with `./contract-uat.sh`:
 
 ## M6: Agent Semantic Capability Expansion
 
-**Status:** Next
+**Status:** Complete
 
 Expose the newer Semantic discovery and navigation capabilities as Agent `QUERY` planning tools.
-The initial scope includes source-symbol resolution, source-segment retrieval, internal source
-references, implementation discovery, and listener discovery where the Semantic contract supports
-them.
+The delivered catalog adds exactly ten capabilities:
+
+- `codebase_discover_concepts`
+- `codebase_resolve_concept`
+- `codebase_discover_event_listeners`
+- `codebase_discover_method_implementations`
+- `codebase_discover_type_members`
+- `codebase_find_internal_references`
+- `codebase_get_evidence_source`
+- `codebase_get_method_source`
+- `codebase_get_source_segment`
+- `codebase_resolve_source_symbol`
 
 The Agent uses its HTTP adapter. MCP remains a separate Semantic adapter for direct tool clients;
 the two adapters may share Semantic application data but not transport-specific implementation.
@@ -89,9 +98,20 @@ M6 is accepted when each new Agent capability is a registration extension, prese
 planning-tool runtime contract, and passes the M5 compatibility suite for its selected service
 revisions.
 
+Acceptance established on 2026-08-09 with `./contract-uat.sh`:
+
+- Agent source and Agent fixture: `350da43b713d3cdea4d3f002442f3c123cfa3bc8`
+- Semantic source: `1b892bd9c81d4421de3034d57ccd923c99dd31a0`
+- discovery fixture: `m6-semantic-contract` at revision `FIXTURE`
+- Semantic MCP contract: 5 tests passed, 0 skipped
+- Agent HTTP consumer contract: 3 tests passed, 0 skipped
+- the Agent live suite exercised all ten capabilities, typed failures, and the provider-issued
+  source-symbol -> method-source -> source-segment continuation chain
+- JUnit summary: `reports/contract-uat/20260809T005940Z-564749/summary.xml`
+
 ## M7: Knowledge Query End to End
 
-**Status:** Planned
+**Status:** Next
 
 Prove the complete user workflow through the deployed services. From a business question, the
 Agent must be able to identify relevant API, scheduled-job, and message-consumer packages, classes,
