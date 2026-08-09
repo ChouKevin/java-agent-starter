@@ -32,7 +32,7 @@ assert_fails() {
 }
 
 bash -n "${ROOT}/knowledge-uat.sh"
-bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory read_deployed_revisions active_deployment_state fixture_revision ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
+bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory read_deployed_revisions active_deployment_state fixture_revision knowledge_compose reset_knowledge_runtime ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
     bash "${ROOT}/knowledge-uat.sh"
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/knowledge-uat.sh"
 grep -Fq 'gemini-3.1-flash-lite' "${ROOT}/knowledge-uat.sh"
@@ -42,6 +42,7 @@ grep -Fq 'repository.sh" ensure m7-knowledge-query' "${ROOT}/knowledge-uat.sh"
 ! rg -q 'SLACK_' "${ROOT}/knowledge-uat.sh"
 ! rg -q '^[[:space:]]*(while|for)[[:space:]]' "${ROOT}/knowledge-uat.sh"
 [[ "$(grep -Fc 'run --rm --no-deps agent-knowledge' "${ROOT}/knowledge-uat.sh")" -eq 1 ]]
+grep -Fq 'reset_knowledge_runtime' "${ROOT}/knowledge-uat.sh"
 
 source "${ROOT}/knowledge-uat.sh"
 
@@ -142,6 +143,16 @@ TEST_DEPLOYMENT_STATE=ACTIVE_DEGRADED
 assert_fails "degraded deployment fails closed" deploy_stack
 TEST_DEPLOYMENT_STATE=ACTIVE_INCONSISTENT
 assert_fails "inconsistent deployment fails closed" deploy_stack
+
+RUNTIME_RESET_INVOCATIONS="${TEMPORARY_DIRECTORY}/runtime-reset-invocations"
+knowledge_compose() {
+    printf '%s\n' "$*" >> "${RUNTIME_RESET_INVOCATIONS}"
+}
+: > "${RUNTIME_RESET_INVOCATIONS}"
+reset_knowledge_runtime
+assert_equals $'stop semantic-service\nrun --rm knowledge-fixture-init\nup --detach --wait semantic-service\n--profile tools run --rm network-probe' \
+    "$(cat "${RUNTIME_RESET_INVOCATIONS}")" \
+    "Semantic stops before the exact M7 runtime reset and returns healthy afterwards"
 
 INVOCATIONS="${TEMPORARY_DIRECTORY}/invocations"
 preflight() {

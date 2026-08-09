@@ -60,7 +60,7 @@ services:
     volumes:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
       - semantic-fixture:/fixtures/m6-semantic-contract
-      - knowledge-fixture:/fixtures/m7-knowledge-query:ro
+      - knowledge-fixture:/fixtures/m7-knowledge-query
       - ${STARTER_ROOT}/data/repositories:/data/repos
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
     restart: unless-stopped
@@ -121,12 +121,15 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
+        mkdir -p /data/jdtls/m7-knowledge-query &&
         find /fixtures/m7-knowledge-query -mindepth 1 -delete &&
+        find /data/jdtls/m7-knowledge-query -mindepth 1 -delete &&
         cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/ &&
-        chown -R 10001:10001 /fixtures/m7-knowledge-query
+        chown -R 10001:10001 /fixtures/m7-knowledge-query /data/jdtls/m7-knowledge-query
     volumes:
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro
       - knowledge-fixture:/fixtures/m7-knowledge-query
+      - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
     restart: "no"
     networks: [agent-network]
 
