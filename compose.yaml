@@ -60,6 +60,7 @@ services:
     volumes:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
       - semantic-fixture:/fixtures/m6-semantic-contract
+      - knowledge-fixture:/fixtures/m7-knowledge-query:ro
       - ${STARTER_ROOT}/data/repositories:/data/repos
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
     restart: unless-stopped
@@ -109,6 +110,43 @@ services:
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m6-semantic-contract:/fixture-source/m6-semantic-contract:ro
       - semantic-fixture:/fixtures/m6-semantic-contract
+    restart: "no"
+    networks: [agent-network]
+
+  knowledge-fixture-init:
+    <<: *runtime-logging
+    image: java-code-intelligence:uat
+    profiles: [knowledge]
+    user: "0:0"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        find /fixtures/m7-knowledge-query -mindepth 1 -delete &&
+        cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/ &&
+        chown -R 10001:10001 /fixtures/m7-knowledge-query
+    volumes:
+      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro
+      - knowledge-fixture:/fixtures/m7-knowledge-query
+    restart: "no"
+    networks: [agent-network]
+
+  knowledge-db-init:
+    <<: *runtime-logging
+    image: postgres:17-alpine
+    profiles: [knowledge]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agent}
+      POSTGRES_DB: ${POSTGRES_DB:-java_system_agent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
+        export PGPASSWORD="$$POSTGRES_PASSWORD"; export PGHOST=postgres; export PGDATABASE=postgres;
+        dropdb -U "$$POSTGRES_USER" --if-exists --force agent_m7_knowledge;
+        createdb -U "$$POSTGRES_USER" agent_m7_knowledge
     restart: "no"
     networks: [agent-network]
 
@@ -172,11 +210,62 @@ services:
       - maven-cache:/root/.m2
       - ${STARTER_ROOT}/reports/contract-uat/${M6_RUN_ID}:/reports
 
+  agent-knowledge:
+    <<: *runtime-logging
+    image: maven:3.9.11-eclipse-temurin-21
+    profiles: [knowledge]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      semantic-service:
+        condition: service_started
+      knowledge-fixture-init:
+        condition: service_completed_successfully
+      knowledge-db-init:
+        condition: service_completed_successfully
+    environment:
+      M7_KNOWLEDGE_LIVE: "true"
+      M7_REPORT_DIRECTORY: /reports
+      CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080
+      CODEBASE_SERVICE_API_TOKEN: ${SEMANTIC_API_TOKEN}
+      SPRING_PROFILES_ACTIVE: agent-runtime
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/agent_m7_knowledge
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
+      GOOGLE_GENAI_MODEL: ${GOOGLE_GENAI_MODEL:-gemini-3.1-flash-lite}
+      HOST_UID: ${HOST_UID:-1000}
+      HOST_GID: ${HOST_GID:-1000}
+    working_dir: /workspace
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mvn --batch-mode --no-transfer-progress clean test -Dtest=M7KnowledgeQueryLiveIT;
+        maven_status=$$?;
+        mkdir -p /reports;
+        cp /workspace/target/surefire-reports/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml /reports/;
+        copy_status=$$?;
+        chown -R "$$HOST_UID:$$HOST_GID" /reports;
+        ownership_status=$$?;
+        if [ "$$maven_status" -ne 0 ]; then exit "$$maven_status"; fi;
+        if [ "$$copy_status" -ne 0 ]; then exit "$$copy_status"; fi;
+        exit "$$ownership_status"
+    volumes:
+      - agent-knowledge-workspace:/workspace
+      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro
+      - maven-cache:/root/.m2
+      - ${STARTER_ROOT}/reports/knowledge-uat/${M7_RUN_ID}:/reports
+    restart: "no"
+    networks: [agent-network]
+
 volumes:
   postgres-data:
   semantic-contract-workspace:
   agent-contract-workspace:
   semantic-fixture:
+  knowledge-fixture:
+  agent-knowledge-workspace:
   maven-cache:
 
 networks:

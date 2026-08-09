@@ -6,12 +6,19 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 bash -n "${ROOT}/deploy.sh"
 bash -n "${ROOT}/repository.sh"
 bash -n "${ROOT}/contract-uat.sh"
+bash -n "${ROOT}/knowledge-uat.sh"
 bash -c 'source "$1"; declare -F classify_compose_rows preflight_active_deployment >/dev/null' bash "${ROOT}/deploy.sh"
 bash -c 'source "$1"; declare -F main request >/dev/null' bash "${ROOT}/repository.sh"
 bash -c 'source "$1"; declare -F main deployment_sha repository_revision pin_agent_fixture ensure_discovery_fixture write_summary_junit >/dev/null' bash "${ROOT}/contract-uat.sh"
+bash -c 'source "$1"; declare -F main preflight read_live_configuration fixture_revision ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' bash "${ROOT}/knowledge-uat.sh"
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/deploy.sh"
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/repository.sh"
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/contract-uat.sh"
+grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/knowledge-uat.sh"
+grep -Fq 'reports/knowledge-uat/${RUN_ID}' "${ROOT}/knowledge-uat.sh"
+grep -Fq 'gemini-3.1-flash-lite' "${ROOT}/knowledge-uat.sh"
+! rg -q 'SLACK_' "${ROOT}/knowledge-uat.sh"
+[[ "$(grep -Fc 'run --rm --no-deps agent-knowledge' "${ROOT}/knowledge-uat.sh")" -eq 1 ]]
 grep -Fq 'ps --all --format' "${ROOT}/deploy.sh"
 grep -q '^AGENT_GIT_REF=uat$' "${ROOT}/.env.example"
 grep -q '^SEMANTIC_GIT_REF=uat$' "${ROOT}/.env.example"
@@ -19,6 +26,10 @@ grep -Fxq '    m6-semantic-contract:' "${ROOT}/config/semantic-repositories.yml"
 grep -Fxq '      mode: LOCAL_FIXTURE' "${ROOT}/config/semantic-repositories.yml"
 grep -Fxq '      display-name: M6 Semantic Contract Fixture' "${ROOT}/config/semantic-repositories.yml"
 grep -Fxq '      path: /fixtures/m6-semantic-contract' "${ROOT}/config/semantic-repositories.yml"
+grep -Fxq '    m7-knowledge-query:' "${ROOT}/config/semantic-repositories.yml"
+grep -Fxq '      mode: LOCAL_FIXTURE' "${ROOT}/config/semantic-repositories.yml"
+grep -Fxq '      display-name: M7 Knowledge Query Fixture' "${ROOT}/config/semantic-repositories.yml"
+grep -Fxq '      path: /fixtures/m7-knowledge-query' "${ROOT}/config/semantic-repositories.yml"
 grep -q '/v1/repositories/.*/ensure' "${ROOT}/repository.sh"
 grep -q '/v1/repositories/.*/sync' "${ROOT}/repository.sh"
 grep -Fq '/checkout' "${ROOT}/repository.sh"
@@ -68,6 +79,8 @@ grep -Fq 'chown -R 10001:10001 /fixtures/m6-semantic-contract' "${ROOT}/compose.
 grep -Fq 'semantic-contract-workspace:/workspace' "${ROOT}/compose.yaml"
 grep -Fq 'agent-contract-workspace:/workspace' "${ROOT}/compose.yaml"
 grep -Fxq '  semantic-fixture:' "${ROOT}/compose.yaml"
+grep -Fxq '  knowledge-fixture:' "${ROOT}/compose.yaml"
+grep -Fxq '  agent-knowledge-workspace:' "${ROOT}/compose.yaml"
 ! grep -Fq 'contract-target:/workspace/target' "${ROOT}/compose.yaml"
 grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=McpLiveContractIT' "${ROOT}/compose.yaml"
 grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=JavaSemanticServiceLiveContractIT' "${ROOT}/compose.yaml"
@@ -80,6 +93,37 @@ grep -Fq 'run --rm "${service}"' "${ROOT}/contract-uat.sh"
 grep -Fq 'reports/contract-uat/${RUN_ID}' "${ROOT}/contract-uat.sh"
 grep -Fq '${M6_RUN_ID}' "${ROOT}/compose.yaml"
 grep -Fxq 'reports/' "${ROOT}/.gitignore"
+
+grep -Fq 'knowledge-fixture-init:' "${ROOT}/compose.yaml"
+grep -Fq 'knowledge-db-init:' "${ROOT}/compose.yaml"
+grep -Fq 'agent-knowledge:' "${ROOT}/compose.yaml"
+[[ "$(grep -Fc 'profiles: [knowledge]' "${ROOT}/compose.yaml")" -eq 3 ]]
+grep -Fq 'knowledge-fixture:/fixtures/m7-knowledge-query:ro' "${ROOT}/compose.yaml"
+grep -Fq 'fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro' "${ROOT}/compose.yaml"
+grep -Fq 'find /fixtures/m7-knowledge-query -mindepth 1 -delete' "${ROOT}/compose.yaml"
+grep -Fq 'cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/' "${ROOT}/compose.yaml"
+grep -Fq 'chown -R 10001:10001 /fixtures/m7-knowledge-query' "${ROOT}/compose.yaml"
+KNOWLEDGE_DB_INIT="$(awk '
+  /^  knowledge-db-init:$/ { inside = 1; print; next }
+  inside && /^  [^[:space:]]/ { exit }
+  inside { print }
+' "${ROOT}/compose.yaml")"
+grep -Fq 'dropdb -U "$$POSTGRES_USER" --if-exists --force agent_m7_knowledge' <<< "${KNOWLEDGE_DB_INIT}"
+grep -Fq 'createdb -U "$$POSTGRES_USER" agent_m7_knowledge' <<< "${KNOWLEDGE_DB_INIT}"
+[[ "$(awk '/dropdb/ { target = $NF; sub(/;$/, "", target); print target }' <<< "${KNOWLEDGE_DB_INIT}")" == "agent_m7_knowledge" ]]
+[[ "$(awk '/createdb/ { print $NF }' <<< "${KNOWLEDGE_DB_INIT}")" == "agent_m7_knowledge" ]]
+! rg -qi 'DROP[[:space:]]+DATABASE' <<< "${KNOWLEDGE_DB_INIT}"
+! rg -qi '(DELETE[[:space:]]+FROM|dropdb|createdb|TRUNCATE)[^;]*java_system_agent' <<< "${KNOWLEDGE_DB_INIT}"
+! rg -qi 'TRUNCATE' <<< "${KNOWLEDGE_DB_INIT}"
+grep -Fq 'jdbc:postgresql://postgres:5432/agent_m7_knowledge' "${ROOT}/compose.yaml"
+grep -Fq 'M7_KNOWLEDGE_LIVE: "true"' "${ROOT}/compose.yaml"
+grep -Fq 'M7_REPORT_DIRECTORY: /reports' "${ROOT}/compose.yaml"
+grep -Fq 'CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080' "${ROOT}/compose.yaml"
+grep -Fq 'TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml' "${ROOT}/compose.yaml"
+grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=M7KnowledgeQueryLiveIT' "${ROOT}/compose.yaml"
+[[ "$(grep -Fc 'mvn --batch-mode --no-transfer-progress clean test -Dtest=M7KnowledgeQueryLiveIT' "${ROOT}/compose.yaml")" -eq 1 ]]
+grep -Fq '${STARTER_ROOT}/reports/knowledge-uat/${M7_RUN_ID}:/reports' "${ROOT}/compose.yaml"
+! rg -q 'SLACK_' <(awk '/^  agent-knowledge:/{inside=1; next} /^  [^[:space:]]/{inside=0} inside' "${ROOT}/compose.yaml")
 
 awk '
   /^  semantic-service:$/ { semantic_service = 1; next }
