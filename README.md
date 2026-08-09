@@ -77,11 +77,9 @@ alias uat='docker compose --project-name java-agent-uat --env-file .env -f compo
 uat ps
 uat logs -f semantic-service
 uat logs -f java-system-agent
-tail -f logs/semantic/application.log
-tail -f logs/agent/application.log
 ```
 
-Application logs are bind-mounted under `logs/`; Docker console logs use bounded `json-file`
-rotation. Runtime clones, data, logs, `.env`, backups, and the deployment record are intentionally
+Docker Compose logs use bounded `json-file` rotation; service restarts no longer depend on host log
+ownership. Runtime clones, data, `.env`, backups, and the deployment record are intentionally
 untracked. To test another service source, change its `*_GIT_URL` and `*_GIT_REF` values before the
 first deploy or remove only its clean checkout under `.runtime/sources/`.
