@@ -103,8 +103,18 @@ grep -Fq 'fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro' "${
 grep -Fq 'find /fixtures/m7-knowledge-query -mindepth 1 -delete' "${ROOT}/compose.yaml"
 grep -Fq 'cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/' "${ROOT}/compose.yaml"
 grep -Fq 'chown -R 10001:10001 /fixtures/m7-knowledge-query' "${ROOT}/compose.yaml"
-! rg -q 'rm -rf /fixtures/m7-knowledge-query|DROP DATABASE|TRUNCATE' "${ROOT}/compose.yaml"
-grep -Fq 'CREATE DATABASE agent_m7_knowledge' "${ROOT}/compose.yaml"
+KNOWLEDGE_DB_INIT="$(awk '
+  /^  knowledge-db-init:$/ { inside = 1; print; next }
+  inside && /^  [^[:space:]]/ { exit }
+  inside { print }
+' "${ROOT}/compose.yaml")"
+grep -Fq 'dropdb -U "$$POSTGRES_USER" --if-exists --force agent_m7_knowledge' <<< "${KNOWLEDGE_DB_INIT}"
+grep -Fq 'createdb -U "$$POSTGRES_USER" agent_m7_knowledge' <<< "${KNOWLEDGE_DB_INIT}"
+[[ "$(awk '/dropdb/ { target = $NF; sub(/;$/, "", target); print target }' <<< "${KNOWLEDGE_DB_INIT}")" == "agent_m7_knowledge" ]]
+[[ "$(awk '/createdb/ { print $NF }' <<< "${KNOWLEDGE_DB_INIT}")" == "agent_m7_knowledge" ]]
+! rg -qi 'DROP[[:space:]]+DATABASE' <<< "${KNOWLEDGE_DB_INIT}"
+! rg -qi '(DELETE[[:space:]]+FROM|dropdb|createdb|TRUNCATE)[^;]*java_system_agent' <<< "${KNOWLEDGE_DB_INIT}"
+! rg -qi 'TRUNCATE' <<< "${KNOWLEDGE_DB_INIT}"
 grep -Fq 'jdbc:postgresql://postgres:5432/agent_m7_knowledge' "${ROOT}/compose.yaml"
 grep -Fq 'M7_KNOWLEDGE_LIVE: "true"' "${ROOT}/compose.yaml"
 grep -Fq 'M7_REPORT_DIRECTORY: /reports' "${ROOT}/compose.yaml"

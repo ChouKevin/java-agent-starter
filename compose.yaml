@@ -144,12 +144,9 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        export PGPASSWORD="$$POSTGRES_PASSWORD"; export PGHOST=postgres;
-        if psql -X -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc
-        "SELECT 1 FROM pg_database WHERE datname = 'agent_m7_knowledge'" | grep -qx '1'; then exit 0; fi;
-        psql -X -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d postgres -c 'CREATE DATABASE agent_m7_knowledge' ||
-        psql -X -v ON_ERROR_STOP=1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB" -tAc
-        "SELECT 1 FROM pg_database WHERE datname = 'agent_m7_knowledge'" | grep -qx '1'
+        export PGPASSWORD="$$POSTGRES_PASSWORD"; export PGHOST=postgres; export PGDATABASE=postgres;
+        dropdb -U "$$POSTGRES_USER" --if-exists --force agent_m7_knowledge;
+        createdb -U "$$POSTGRES_USER" agent_m7_knowledge
     restart: "no"
     networks: [agent-network]
 
