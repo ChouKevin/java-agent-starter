@@ -64,6 +64,8 @@ printf 'GOOGLE_API_KEY=poc-not-used\n' > "${TEST_ROOT}/.env"
 assert_fails "placeholder API key fails before Docker or deployment" read_live_configuration
 printf 'GOOGLE_API_KEY=example-key\n' > "${TEST_ROOT}/.env"
 assert_fails "common placeholder API key fails before Docker or deployment" read_live_configuration
+printf 'GOOGLE_API_KEY=  example-key  \n' > "${TEST_ROOT}/.env"
+assert_fails "padded placeholder API key fails before Docker or deployment" read_live_configuration
 printf 'GOOGLE_API_KEY=live-key\nGOOGLE_GENAI_MODEL=custom-model\n' > "${TEST_ROOT}/.env"
 read_live_configuration
 assert_equals custom-model "${GOOGLE_MODEL}" "configured live model"

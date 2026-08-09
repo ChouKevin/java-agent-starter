@@ -41,11 +41,14 @@ preflight() {
 
 read_live_configuration() {
     local api_key
+    local validation_key
     local normalized_key
 
     api_key="$(operator_value GOOGLE_API_KEY)"
-    normalized_key="$(tr '[:upper:]' '[:lower:]' <<< "${api_key}")"
-    [[ -n "${api_key//[[:space:]]/}" ]] \
+    validation_key="${api_key#"${api_key%%[![:space:]]*}"}"
+    validation_key="${validation_key%"${validation_key##*[![:space:]]}"}"
+    normalized_key="$(tr '[:upper:]' '[:lower:]' <<< "${validation_key}")"
+    [[ -n "${validation_key}" ]] \
         || fail "GOOGLE_API_KEY must be configured for a live M7 run"
     case "${normalized_key}" in
         poc-*|example|example-*|replace-me|replace-*|your-*|changeme|change-me|test-*|fake-*|dummy-*)
