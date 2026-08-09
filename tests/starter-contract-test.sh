@@ -43,10 +43,15 @@ grep -Fq '${STARTER_ROOT}/.runtime/sources/java-code-intelligence/pom.xml:/works
 grep -Fq '${STARTER_ROOT}/.runtime/sources/java-code-intelligence/src:/workspace/src:ro' "${ROOT}/compose.yaml"
 grep -Fq '${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro' "${ROOT}/compose.yaml"
 grep -Fq '${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro' "${ROOT}/compose.yaml"
-grep -Fq '${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m6-semantic-contract:/fixtures/m6-semantic-contract:ro' \
+grep -Fq '${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m6-semantic-contract:/fixture-source/m6-semantic-contract:ro' \
     "${ROOT}/compose.yaml"
+[[ "$(grep -Fc 'semantic-fixture:/fixtures/m6-semantic-contract' "${ROOT}/compose.yaml")" -eq 2 ]]
+grep -Fq 'find /fixtures/m6-semantic-contract -mindepth 1 -delete' "${ROOT}/compose.yaml"
+grep -Fq 'cp -a /fixture-source/m6-semantic-contract/. /fixtures/m6-semantic-contract/' "${ROOT}/compose.yaml"
+grep -Fq 'chown -R 10001:10001 /fixtures/m6-semantic-contract' "${ROOT}/compose.yaml"
 grep -Fq 'semantic-contract-workspace:/workspace' "${ROOT}/compose.yaml"
 grep -Fq 'agent-contract-workspace:/workspace' "${ROOT}/compose.yaml"
+grep -Fxq '  semantic-fixture:' "${ROOT}/compose.yaml"
 ! grep -Fq 'contract-target:/workspace/target' "${ROOT}/compose.yaml"
 grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=McpLiveContractIT' "${ROOT}/compose.yaml"
 grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=JavaSemanticServiceLiveContractIT' "${ROOT}/compose.yaml"
