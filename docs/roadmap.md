@@ -109,6 +109,27 @@ Acceptance established on 2026-08-09 with `./contract-uat.sh`:
   source-symbol -> method-source -> source-segment continuation chain
 - JUnit summary: `reports/contract-uat/20260809T005940Z-564749/summary.xml`
 
+## Pre-M7 Environment Hardening
+
+**Status:** Accepted on 2026-08-09
+
+The deployed Docker Compose environment was hardened and accepted before beginning M7:
+
+- Starter deployment composition: `2dc99b444f7cec78dd9643f074dc12b280a9e797`
+- Agent source: `e6d4d7a610f9fdf65ac26a6336db65db88c8e2b6`
+- Semantic source: `abb83807c07e036049253f17d942e2754bd639d4`
+- application logs use Docker console logging without host-mounted application log directories;
+  both services restarted successfully without a permissions initialization step
+- Semantic serves the authoritative OpenAPI document at `/openapi/semantic-api-v1.yaml` and
+  Swagger UI at `/swagger-ui/index.html`; generated `/v3/api-docs` remains disabled
+- public documentation routes were accessible without a token, a missing Swagger asset returned
+  `404`, and the protected `/v1/repositories` API returned `401` without a token and `200` with one
+- Semantic MCP contract: 5 tests passed, 0 failed, 0 skipped
+- Agent HTTP consumer contract: 3 tests passed, 0 failed, 0 skipped
+- JUnit summary: `reports/contract-uat/20260809T021828Z-688050/summary.xml`
+
+M7 remains the next milestone.
+
 ## M7: Knowledge Query End to End
 
 **Status:** Next
@@ -132,7 +153,6 @@ repository. The scenario verifies the final evidence trail rather than only serv
 Harden the integration after the knowledge-query path is complete:
 
 - measure and reduce JDT LS cold-start and repeated-query latency
-- resolve the Semantic OpenAPI endpoint failure or explicitly replace that discovery boundary
 - define a tested service-revision compatibility matrix and rollback procedure
 - verify cache, monitoring logs, and bounded response behavior under multiple repositories
 - verify repository isolation when concurrent requests target different repository identities
