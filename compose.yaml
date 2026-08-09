@@ -62,7 +62,6 @@ services:
       - semantic-fixture:/fixtures/m6-semantic-contract
       - ${STARTER_ROOT}/data/repositories:/data/repos
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
-      - ${STARTER_ROOT}/logs/semantic:/app/logs
     restart: unless-stopped
     networks: [agent-network]
 
@@ -88,8 +87,6 @@ services:
       SLACK_BOT_USER_ID: ${SLACK_BOT_USER_ID:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-poc-not-used}
       GOOGLE_GENAI_MODEL: ${GOOGLE_GENAI_MODEL:-gemini-3.1-flash-lite}
-    volumes:
-      - ${STARTER_ROOT}/logs/agent:/app/logs
     restart: unless-stopped
     stop_grace_period: 45s
     networks: [agent-network]
@@ -104,16 +101,12 @@ services:
       - >-
         find /fixtures/m6-semantic-contract -mindepth 1 -delete &&
         cp -a /fixture-source/m6-semantic-contract/. /fixtures/m6-semantic-contract/ &&
-        chown -R 10001:10001 /data/repos /data/jdtls /app/agent-logs /app/semantic-logs &&
+        chown -R 10001:10001 /data/repos /data/jdtls &&
         chown -R 10001:10001 /fixtures/m6-semantic-contract &&
-        find /data/repos /data/jdtls -type d -exec chmod 0750 {} + &&
-        find /app/agent-logs /app/semantic-logs -type d -exec chmod 0755 {} + &&
-        find /app/agent-logs /app/semantic-logs -type f -exec chmod 0644 {} +
+        find /data/repos /data/jdtls -type d -exec chmod 0750 {} +
     volumes:
       - ${STARTER_ROOT}/data/repositories:/data/repos
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
-      - ${STARTER_ROOT}/logs/agent:/app/agent-logs
-      - ${STARTER_ROOT}/logs/semantic:/app/semantic-logs
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m6-semantic-contract:/fixture-source/m6-semantic-contract:ro
       - semantic-fixture:/fixtures/m6-semantic-contract
     restart: "no"

@@ -26,6 +26,22 @@ grep -Fq '^[0-9a-f]{40}$' "${ROOT}/repository.sh"
 ! grep -qE '^[[:space:]]+ports:' "${ROOT}/compose.yaml" \
     || [[ "$(grep -cE '^[[:space:]]+ports:' "${ROOT}/compose.yaml")" -eq 1 ]]
 
+if rg -q '\$\{STARTER_ROOT\}/logs/(agent|semantic)' "${ROOT}/compose.yaml"; then
+    exit 1
+fi
+if rg -q '/app/(agent-logs|semantic-logs)' "${ROOT}/compose.yaml"; then
+    exit 1
+fi
+if rg -q '\$\{ROOT\}/logs/(agent|semantic)' "${ROOT}/deploy.sh"; then
+    exit 1
+fi
+if rg -q 'tail -f' "${ROOT}/README.md"; then
+    exit 1
+fi
+grep -Fq 'uat logs -f semantic-service' "${ROOT}/README.md"
+grep -Fq 'uat logs -f java-system-agent' "${ROOT}/README.md"
+grep -Fq 'bounded `json-file` rotation' "${ROOT}/README.md"
+
 grep -Fq 'x-contract-runner: &contract-runner' "${ROOT}/compose.yaml"
 grep -Fq 'image: maven:3.9.11-eclipse-temurin-21' "${ROOT}/compose.yaml"
 grep -Fq 'profiles: [contract]' "${ROOT}/compose.yaml"

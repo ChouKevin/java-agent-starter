@@ -207,19 +207,11 @@ preflight_active_deployment() {
 }
 
 prepare_host_paths() {
-    local log_directory
-
     mkdir -p \
         "${SOURCES_DIR}" \
         "${ROOT}/backups" \
         "${ROOT}/data/repositories" \
         "${ROOT}/data/jdtls-workspaces"
-    for log_directory in "${ROOT}/logs/agent" "${ROOT}/logs/semantic"; do
-        if [[ ! -d "${log_directory}" ]]; then
-            mkdir -p "${log_directory}"
-            chmod 0755 "${log_directory}"
-        fi
-    done
     chmod 0700 "${ROOT}/backups"
     chmod 0644 "${ROOT}/config/semantic-repositories.yml"
 }
