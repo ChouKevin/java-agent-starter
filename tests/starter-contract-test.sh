@@ -98,11 +98,22 @@ grep -Fq 'knowledge-fixture-init:' "${ROOT}/compose.yaml"
 grep -Fq 'knowledge-db-init:' "${ROOT}/compose.yaml"
 grep -Fq 'agent-knowledge:' "${ROOT}/compose.yaml"
 [[ "$(grep -Fc 'profiles: [knowledge]' "${ROOT}/compose.yaml")" -eq 3 ]]
-grep -Fq 'knowledge-fixture:/fixtures/m7-knowledge-query:ro' "${ROOT}/compose.yaml"
-grep -Fq 'fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro' "${ROOT}/compose.yaml"
-grep -Fq 'find /fixtures/m7-knowledge-query -mindepth 1 -delete' "${ROOT}/compose.yaml"
-grep -Fq 'cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/' "${ROOT}/compose.yaml"
-grep -Fq 'chown -R 10001:10001 /fixtures/m7-knowledge-query' "${ROOT}/compose.yaml"
+[[ "$(grep -Fc 'knowledge-fixture:/fixtures/m7-knowledge-query' "${ROOT}/compose.yaml")" -eq 2 ]]
+! grep -Fq 'knowledge-fixture:/fixtures/m7-knowledge-query:ro' "${ROOT}/compose.yaml"
+KNOWLEDGE_FIXTURE_INIT="$(awk '
+  /^  knowledge-fixture-init:$/ { inside = 1; print; next }
+  inside && /^  [^[:space:]]/ { exit }
+  inside { print }
+' "${ROOT}/compose.yaml")"
+grep -Fq 'fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro' <<< "${KNOWLEDGE_FIXTURE_INIT}"
+grep -Fq 'find /fixtures/m7-knowledge-query -mindepth 1 -delete' <<< "${KNOWLEDGE_FIXTURE_INIT}"
+grep -Fq 'cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/' \
+    <<< "${KNOWLEDGE_FIXTURE_INIT}"
+grep -Fq 'mkdir -p /data/jdtls/m7-knowledge-query' <<< "${KNOWLEDGE_FIXTURE_INIT}"
+grep -Fq 'find /data/jdtls/m7-knowledge-query -mindepth 1 -delete' <<< "${KNOWLEDGE_FIXTURE_INIT}"
+grep -Fq 'chown -R 10001:10001 /fixtures/m7-knowledge-query /data/jdtls/m7-knowledge-query' \
+    <<< "${KNOWLEDGE_FIXTURE_INIT}"
+grep -Fq '${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls' <<< "${KNOWLEDGE_FIXTURE_INIT}"
 KNOWLEDGE_DB_INIT="$(awk '
   /^  knowledge-db-init:$/ { inside = 1; print; next }
   inside && /^  [^[:space:]]/ { exit }

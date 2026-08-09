@@ -157,15 +157,29 @@ fixture_revision() {
     printf 'FIXTURE'
 }
 
-knowledge_compose_run() {
-    local service="$1"
-
+knowledge_compose() {
     docker compose \
         --project-name java-agent-uat \
         --env-file "${ENV_FILE}" \
         -f "${ROOT}/compose.yaml" \
         --profile knowledge \
-        run --rm "${service}"
+        "$@"
+}
+
+knowledge_compose_run() {
+    local service="$1"
+
+    knowledge_compose run --rm "${service}"
+}
+
+reset_knowledge_runtime() {
+    knowledge_compose stop semantic-service
+    if ! knowledge_compose_run knowledge-fixture-init; then
+        knowledge_compose up --detach --wait semantic-service || true
+        fail "could not reset the M7 fixture and JDT workspace"
+    fi
+    knowledge_compose up --detach --wait semantic-service
+    knowledge_compose --profile tools run --rm network-probe
 }
 
 ensure_knowledge_fixture_and_database() {
@@ -175,7 +189,7 @@ ensure_knowledge_fixture_and_database() {
     export HOST_UID="$(id -u)"
     export HOST_GID="$(id -g)"
     export STARTER_ROOT="${ROOT}"
-    knowledge_compose_run knowledge-fixture-init
+    reset_knowledge_runtime
     knowledge_compose_run knowledge-db-init
     "${ROOT}/repository.sh" ensure m7-knowledge-query
     response="$("${ROOT}/repository.sh" revision m7-knowledge-query)"
