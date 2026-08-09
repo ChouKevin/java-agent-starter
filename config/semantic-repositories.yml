@@ -9,3 +9,7 @@ semantic:
       mode: LOCAL_FIXTURE
       display-name: M6 Semantic Contract Fixture
       path: /fixtures/m6-semantic-contract
+    m7-knowledge-query:
+      mode: LOCAL_FIXTURE
+      display-name: M7 Knowledge Query Fixture
+      path: /fixtures/m7-knowledge-query
