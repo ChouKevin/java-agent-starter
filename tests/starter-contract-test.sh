@@ -129,6 +129,8 @@ grep -Fq 'createdb -U "$$POSTGRES_USER" agent_m7_knowledge' <<< "${KNOWLEDGE_DB_
 grep -Fq 'jdbc:postgresql://postgres:5432/agent_m7_knowledge' "${ROOT}/compose.yaml"
 grep -Fq 'M7_KNOWLEDGE_LIVE: "true"' "${ROOT}/compose.yaml"
 grep -Fq 'M7_KNOWLEDGE_SEED: ${M7_KNOWLEDGE_SEED}' "${ROOT}/compose.yaml"
+grep -Fq 'M7_AGENT_SOURCE_SHA: ${M7_AGENT_SOURCE_SHA}' "${ROOT}/compose.yaml"
+grep -Fq 'M7_SEMANTIC_SOURCE_SHA: ${M7_SEMANTIC_SOURCE_SHA}' "${ROOT}/compose.yaml"
 grep -Fq 'M7_REPORT_DIRECTORY: /reports' "${ROOT}/compose.yaml"
 grep -Fq 'CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080' "${ROOT}/compose.yaml"
 grep -Fq 'TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml' "${ROOT}/compose.yaml"

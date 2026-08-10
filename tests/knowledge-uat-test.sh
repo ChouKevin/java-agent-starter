@@ -94,6 +94,31 @@ source "${ORIGINAL_ROOT}/knowledge-uat.sh"
 ROOT="${TEST_ROOT}"
 ENV_FILE="${TEST_ROOT}/.env"
 
+starter_sha() {
+    printf '%s' "${TEST_STARTER_SHA}"
+}
+
+deployment_sha() {
+    case "$1" in
+        'Agent source SHA')
+            printf '%s' "${TEST_AGENT_SHA}"
+            ;;
+        'Semantic source SHA')
+            printf '%s' "${TEST_SEMANTIC_SHA}"
+            ;;
+        *)
+            exit 1
+            ;;
+    esac
+}
+
+unset M7_AGENT_SOURCE_SHA M7_SEMANTIC_SOURCE_SHA
+read_deployed_revisions
+assert_equals "${TEST_AGENT_SHA}" "${M7_AGENT_SOURCE_SHA}" \
+    "Agent deployment SHA reaches the live test environment"
+assert_equals "${TEST_SEMANTIC_SHA}" "${M7_SEMANTIC_SOURCE_SHA}" \
+    "Semantic deployment SHA reaches the live test environment"
+
 FAKE_BIN_DIRECTORY="${TEMPORARY_DIRECTORY}/fake-bin"
 FAKE_DOCKER_ENVIRONMENTS="${TEMPORARY_DIRECTORY}/docker-environments"
 FAKE_DOCKER_INVOCATIONS="${TEMPORARY_DIRECTORY}/docker-invocations"
@@ -116,6 +141,16 @@ export M7_KNOWLEDGE_SEED
 assert_fails "invalid knowledge seed stops main before Docker" main
 [[ ! -s "${FAKE_DOCKER_INVOCATIONS}" ]] || {
     printf 'invalid knowledge seed reached Docker Compose\n' >&2
+    exit 1
+}
+unset M7_KNOWLEDGE_SEED
+
+: > "${FAKE_DOCKER_INVOCATIONS}"
+M7_KNOWLEDGE_SEED=9223372036854775808
+export M7_KNOWLEDGE_SEED
+assert_fails "overflow knowledge seed stops main before Docker" main
+[[ ! -s "${FAKE_DOCKER_INVOCATIONS}" ]] || {
+    printf 'overflow knowledge seed reached Docker Compose\n' >&2
     exit 1
 }
 unset M7_KNOWLEDGE_SEED

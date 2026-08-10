@@ -102,12 +102,19 @@ create_run_directory() {
 
 select_knowledge_seed() {
     local supplied_seed
+    local canonical_seed
 
     supplied_seed="$(operator_value M7_KNOWLEDGE_SEED)"
     if [[ -n "${supplied_seed}" ]]; then
         [[ "${supplied_seed}" =~ ^[0-9]+$ ]] \
             || fail "M7_KNOWLEDGE_SEED must be a nonnegative integer"
-        KNOWLEDGE_SEED="${supplied_seed}"
+        canonical_seed="$(sed 's/^0*//' <<< "${supplied_seed}")"
+        [[ -n "${canonical_seed}" ]] || canonical_seed=0
+        [[ "${#canonical_seed}" -lt 19 \
+            || ( "${#canonical_seed}" -eq 19 && "${canonical_seed}" < "9223372036854775807" ) \
+            || "${canonical_seed}" == "9223372036854775807" ]] \
+            || fail "M7_KNOWLEDGE_SEED must be in decimal range 0..9223372036854775807"
+        KNOWLEDGE_SEED="${canonical_seed}"
     else
         KNOWLEDGE_SEED="$(cksum <<< "${RUN_ID}" | awk '{print $1}')"
     fi
@@ -159,6 +166,8 @@ read_deployed_revisions() {
     STARTER_SHA="$(starter_sha)"
     AGENT_SHA="$(deployment_sha 'Agent source SHA')"
     SEMANTIC_SHA="$(deployment_sha 'Semantic source SHA')"
+    export M7_AGENT_SOURCE_SHA="${AGENT_SHA}"
+    export M7_SEMANTIC_SOURCE_SHA="${SEMANTIC_SHA}"
 }
 
 fixture_revision() {
