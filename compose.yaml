@@ -228,6 +228,7 @@ services:
         condition: service_completed_successfully
     environment:
       M7_KNOWLEDGE_LIVE: "true"
+      M7_KNOWLEDGE_SEED: ${M7_KNOWLEDGE_SEED}
       M7_REPORT_DIRECTORY: /reports
       CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080
       CODEBASE_SERVICE_API_TOKEN: ${SEMANTIC_API_TOKEN}

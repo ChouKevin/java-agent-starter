@@ -32,7 +32,7 @@ assert_fails() {
 }
 
 bash -n "${ROOT}/knowledge-uat.sh"
-bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory read_deployed_revisions active_deployment_state fixture_revision knowledge_compose reset_knowledge_runtime ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
+bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory select_knowledge_seed read_deployed_revisions active_deployment_state fixture_revision knowledge_compose reset_knowledge_runtime ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
     bash "${ROOT}/knowledge-uat.sh"
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/knowledge-uat.sh"
 grep -Fq 'gemini-3.1-flash-lite' "${ROOT}/knowledge-uat.sh"
@@ -93,6 +93,61 @@ printf 'GOOGLE_API_KEY=live-key\n' > "${TEST_ROOT}/.env"
 source "${ORIGINAL_ROOT}/knowledge-uat.sh"
 ROOT="${TEST_ROOT}"
 ENV_FILE="${TEST_ROOT}/.env"
+
+FAKE_BIN_DIRECTORY="${TEMPORARY_DIRECTORY}/fake-bin"
+FAKE_DOCKER_ENVIRONMENTS="${TEMPORARY_DIRECTORY}/docker-environments"
+FAKE_DOCKER_INVOCATIONS="${TEMPORARY_DIRECTORY}/docker-invocations"
+mkdir -p "${FAKE_BIN_DIRECTORY}"
+printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'printf "%s\\n" "${M7_KNOWLEDGE_SEED:-}" >> "${FAKE_DOCKER_ENVIRONMENTS}"' \
+    'printf "%s\\n" "$*" >> "${FAKE_DOCKER_INVOCATIONS}"' \
+    > "${FAKE_BIN_DIRECTORY}/docker"
+chmod +x "${FAKE_BIN_DIRECTORY}/docker"
+export FAKE_DOCKER_ENVIRONMENTS FAKE_DOCKER_INVOCATIONS
+ORIGINAL_PATH="${PATH}"
+PATH="${FAKE_BIN_DIRECTORY}:${PATH}"
+
+: > "${FAKE_DOCKER_INVOCATIONS}"
+unset M7_KNOWLEDGE_SEED
+printf 'GOOGLE_API_KEY=live-key\n' > "${TEST_ROOT}/.env"
+M7_KNOWLEDGE_SEED=invalid
+export M7_KNOWLEDGE_SEED
+assert_fails "invalid knowledge seed stops main before Docker" main
+[[ ! -s "${FAKE_DOCKER_INVOCATIONS}" ]] || {
+    printf 'invalid knowledge seed reached Docker Compose\n' >&2
+    exit 1
+}
+unset M7_KNOWLEDGE_SEED
+
+RUN_ID=knowledge-seed-determinism
+KNOWLEDGE_SEED=""
+select_knowledge_seed
+FIRST_DERIVED_SEED="${KNOWLEDGE_SEED}"
+[[ "${FIRST_DERIVED_SEED}" =~ ^[0-9]+$ ]] || {
+    printf 'derived knowledge seed must be a nonnegative decimal\n' >&2
+    exit 1
+}
+KNOWLEDGE_SEED=""
+unset M7_KNOWLEDGE_SEED
+select_knowledge_seed
+assert_equals "${FIRST_DERIVED_SEED}" "${KNOWLEDGE_SEED}" \
+    "the same run ID derives the same knowledge seed"
+
+: > "${FAKE_DOCKER_ENVIRONMENTS}"
+: > "${FAKE_DOCKER_INVOCATIONS}"
+RUN_ID=knowledge-seed-explicit
+KNOWLEDGE_SEED=""
+M7_KNOWLEDGE_SEED=42
+export M7_KNOWLEDGE_SEED
+select_knowledge_seed
+assert_equals 42 "${KNOWLEDGE_SEED}" "explicit nonnegative knowledge seed"
+run_live_scenario
+assert_equals 42 "$(cat "${FAKE_DOCKER_ENVIRONMENTS}")" \
+    "explicit knowledge seed reaches Docker Compose agent test invocation"
+grep -Fq 'run --rm --no-deps agent-knowledge' "${FAKE_DOCKER_INVOCATIONS}"
+unset M7_KNOWLEDGE_SEED
+
 assert_equals FIXTURE "$(fixture_revision '{"currentRevision":"FIXTURE"}')" "exact fixture revision"
 assert_fails "duplicate fixture revisions are rejected" fixture_revision \
     '{"currentRevision":"FIXTURE","nested":{"currentRevision":"FIXTURE"}}'
@@ -100,6 +155,7 @@ assert_fails "duplicate fixture revisions are rejected" fixture_revision \
 RUN_ID=knowledge-test-run
 RUN_DIRECTORY="${TEST_ROOT}/report"
 mkdir -p "${RUN_DIRECTORY}"
+KNOWLEDGE_SEED=17
 STARTER_SHA="${TEST_STARTER_SHA}"
 AGENT_SHA="${TEST_AGENT_SHA}"
 SEMANTIC_SHA="${TEST_SEMANTIC_SHA}"
@@ -113,8 +169,9 @@ grep -Fq "semanticSourceSha=${SEMANTIC_SHA}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq 'fixtureId=m7-knowledge-query' "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq 'fixtureRevision=FIXTURE' "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq "model=${GOOGLE_MODEL}" "${RUN_DIRECTORY}/manifest.txt"
+grep -Fxq 'knowledgeSeed=17' "${RUN_DIRECTORY}/manifest.txt"
 ! rg -q 'budgetHandleCount' "${RUN_DIRECTORY}/manifest.txt"
-! rg -qi 'key|token|prompt|evidence|reason|environment' "${RUN_DIRECTORY}/manifest.txt"
+! rg -qi 'key|token|prompt|question|evidence|reason|environment' "${RUN_DIRECTORY}/manifest.txt"
 
 JUNIT_FILE="${RUN_DIRECTORY}/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml"
 printf '<testsuite tests="1" failures="0" errors="0" skipped="0"/>\n' > "${JUNIT_FILE}"
@@ -167,6 +224,9 @@ create_run_directory() {
     mkdir -p "${RUN_DIRECTORY}"
     printf 'report-directory\n' >> "${INVOCATIONS}"
 }
+select_knowledge_seed() {
+    printf 'select-seed\n' >> "${INVOCATIONS}"
+}
 deploy_stack() {
     printf 'deploy\n' >> "${INVOCATIONS}"
 }
@@ -192,11 +252,12 @@ validate_junit() {
 
 : > "${INVOCATIONS}"
 main
-assert_equals $'preflight\nreport-directory\ndeploy\nrevisions\nfixture-db\nmanifest\nlive-run\nvalidate-junit' \
+assert_equals $'preflight\nreport-directory\nselect-seed\ndeploy\nrevisions\nfixture-db\nmanifest\nlive-run\nvalidate-junit' \
     "$(cat "${INVOCATIONS}")" \
     "preflight precedes every Docker-mutating stage and the live scenario runs once"
 
 ROOT="${ORIGINAL_ROOT}"
 ENV_FILE="${ROOT}/.env"
+PATH="${ORIGINAL_PATH}"
 unset GOOGLE_API_KEY GOOGLE_GENAI_MODEL
 printf 'knowledge UAT tests passed\n'

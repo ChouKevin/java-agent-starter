@@ -11,6 +11,7 @@ AGENT_SHA=""
 SEMANTIC_SHA=""
 GOOGLE_MODEL=""
 FIXTURE_REVISION=""
+KNOWLEDGE_SEED=""
 
 fail() {
     printf 'knowledge-uat: %s\n' "$*" >&2
@@ -97,6 +98,20 @@ create_run_directory() {
     RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
     RUN_DIRECTORY="${ROOT}/reports/knowledge-uat/${RUN_ID}"
     mkdir -p "${RUN_DIRECTORY}"
+}
+
+select_knowledge_seed() {
+    local supplied_seed
+
+    supplied_seed="$(operator_value M7_KNOWLEDGE_SEED)"
+    if [[ -n "${supplied_seed}" ]]; then
+        [[ "${supplied_seed}" =~ ^[0-9]+$ ]] \
+            || fail "M7_KNOWLEDGE_SEED must be a nonnegative integer"
+        KNOWLEDGE_SEED="${supplied_seed}"
+    else
+        KNOWLEDGE_SEED="$(cksum <<< "${RUN_ID}" | awk '{print $1}')"
+    fi
+    export M7_KNOWLEDGE_SEED="${KNOWLEDGE_SEED}"
 }
 
 deploy_stack() {
@@ -239,6 +254,7 @@ write_manifest() {
         printf 'fixtureId=m7-knowledge-query\n'
         printf 'fixtureRevision=%s\n' "${FIXTURE_REVISION}"
         printf 'model=%s\n' "${GOOGLE_MODEL}"
+        printf 'knowledgeSeed=%s\n' "${KNOWLEDGE_SEED}"
     } > "${RUN_DIRECTORY}/manifest.txt"
 }
 
@@ -246,6 +262,7 @@ main() {
     preflight
     read_live_configuration
     create_run_directory
+    select_knowledge_seed
     deploy_stack
     read_deployed_revisions
     ensure_knowledge_fixture_and_database
