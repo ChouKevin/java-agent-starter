@@ -39,6 +39,17 @@ Set `SPRING_PROFILES_ACTIVE=slack-agent` and the Slack/model values in `.env` on
 the complete Slack Agent. Slack Socket Mode is outbound, so Java System Agent still needs no
 published inbound port.
 
+## Knowledge acceptance
+
+Run the default M7 scenario with `./knowledge-uat.sh`, or the payment scenario with
+`./payment-uat.sh`. Each run reuses only a healthy active deployment and records the exact Starter,
+Agent, and Semantic source SHAs from that deployment in `reports/knowledge-uat/<run-id>/`.
+
+Knowledge acceptance resets the dedicated `agent_knowledge_live` database and isolated M7/payment
+fixture volumes and JDT workspaces before running its selected test. The report directory receives
+the selected JUnit XML and a manifest with the scenario, fixture revision, model, seed, and source
+SHAs.
+
 ## Add a repository for analysis
 
 1. Add an entry under `semantic.repositories` in
