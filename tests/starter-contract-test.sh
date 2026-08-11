@@ -60,6 +60,8 @@ fi
 grep -Fq 'uat logs -f semantic-service' "${ROOT}/README.md"
 grep -Fq 'uat logs -f java-system-agent' "${ROOT}/README.md"
 grep -Fq 'bounded `json-file` rotation' "${ROOT}/README.md"
+grep -Fq 'JDTLS_REQUEST_TIMEOUT: ${JDTLS_REQUEST_TIMEOUT:-120s}' "${ROOT}/compose.yaml"
+grep -q '^JDTLS_REQUEST_TIMEOUT=120s$' "${ROOT}/.env.example"
 
 grep -Fq 'x-contract-runner: &contract-runner' "${ROOT}/compose.yaml"
 grep -Fq 'image: maven:3.9.11-eclipse-temurin-21' "${ROOT}/compose.yaml"
