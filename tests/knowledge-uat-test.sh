@@ -140,7 +140,7 @@ deployment_sha() {
     esac
 }
 
-unset M7_AGENT_SOURCE_SHA M7_SEMANTIC_SOURCE_SHA KNOWLEDGE_AGENT_SOURCE_SHA KNOWLEDGE_SEMANTIC_SOURCE_SHA
+unset M7_AGENT_SOURCE_SHA M7_SEMANTIC_SOURCE_SHA KNOWLEDGE_AGENT_SOURCE_SHA KNOWLEDGE_SEMANTIC_SOURCE_SHA KNOWLEDGE_STARTER_SOURCE_SHA
 read_deployed_revisions
 assert_equals "${TEST_AGENT_SHA}" "${M7_AGENT_SOURCE_SHA}" \
     "Agent deployment SHA reaches the live test environment"
@@ -150,6 +150,8 @@ assert_equals "${TEST_AGENT_SHA}" "${KNOWLEDGE_AGENT_SOURCE_SHA}" \
     "Agent deployment SHA reaches the selected live test environment"
 assert_equals "${TEST_SEMANTIC_SHA}" "${KNOWLEDGE_SEMANTIC_SOURCE_SHA}" \
     "Semantic deployment SHA reaches the selected live test environment"
+assert_equals "${TEST_STARTER_SHA}" "${KNOWLEDGE_STARTER_SOURCE_SHA}" \
+    "Starter deployment SHA reaches the selected live test environment"
 
 FAKE_BIN_DIRECTORY="${TEMPORARY_DIRECTORY}/fake-bin"
 FAKE_DOCKER_ENVIRONMENTS="${TEMPORARY_DIRECTORY}/docker-environments"

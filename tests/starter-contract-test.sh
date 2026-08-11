@@ -148,6 +148,12 @@ grep -Fq 'M7_KNOWLEDGE_LIVE: ${M7_KNOWLEDGE_LIVE}' "${ROOT}/compose.yaml"
 grep -Fq 'PAYMENT_KNOWLEDGE_LIVE: ${PAYMENT_KNOWLEDGE_LIVE}' "${ROOT}/compose.yaml"
 grep -Fq 'KNOWLEDGE_FIXTURE_ID: ${KNOWLEDGE_FIXTURE_ID}' "${ROOT}/compose.yaml"
 grep -Fq 'KNOWLEDGE_TEST_CLASS: ${KNOWLEDGE_TEST_CLASS}' "${ROOT}/compose.yaml"
+grep -Fq 'KNOWLEDGE_AGENT_SOURCE_SHA: ${KNOWLEDGE_AGENT_SOURCE_SHA}' "${ROOT}/compose.yaml"
+grep -Fq 'KNOWLEDGE_SEMANTIC_SOURCE_SHA: ${KNOWLEDGE_SEMANTIC_SOURCE_SHA}' "${ROOT}/compose.yaml"
+if ! grep -Fq 'KNOWLEDGE_STARTER_SOURCE_SHA: ${KNOWLEDGE_STARTER_SOURCE_SHA}' "${ROOT}/compose.yaml"; then
+    printf 'agent-knowledge must receive KNOWLEDGE_STARTER_SOURCE_SHA\n' >&2
+    exit 1
+fi
 grep -Fq 'M7_KNOWLEDGE_SEED: ${M7_KNOWLEDGE_SEED}' "${ROOT}/compose.yaml"
 grep -Fq 'M7_AGENT_SOURCE_SHA: ${M7_AGENT_SOURCE_SHA}' "${ROOT}/compose.yaml"
 grep -Fq 'M7_SEMANTIC_SOURCE_SHA: ${M7_SEMANTIC_SOURCE_SHA}' "${ROOT}/compose.yaml"

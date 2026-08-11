@@ -52,7 +52,7 @@ read_live_configuration() {
     validation_key="${validation_key%"${validation_key##*[![:space:]]}"}"
     normalized_key="$(tr '[:upper:]' '[:lower:]' <<< "${validation_key}")"
     [[ -n "${validation_key}" ]] \
-        || fail "GOOGLE_API_KEY must be configured for a live M7 run"
+        || fail "GOOGLE_API_KEY must be configured for a live knowledge run"
     case "${normalized_key}" in
         poc-*|example|example-*|replace-me|replace-*|your-*|changeme|change-me|test-*|fake-*|dummy-*)
             fail "GOOGLE_API_KEY must be a live provider credential, not a placeholder"
@@ -211,6 +211,7 @@ read_deployed_revisions() {
     export M7_SEMANTIC_SOURCE_SHA="${SEMANTIC_SHA}"
     export KNOWLEDGE_AGENT_SOURCE_SHA="${AGENT_SHA}"
     export KNOWLEDGE_SEMANTIC_SOURCE_SHA="${SEMANTIC_SHA}"
+    export KNOWLEDGE_STARTER_SOURCE_SHA="${STARTER_SHA}"
 }
 
 fixture_revision() {
