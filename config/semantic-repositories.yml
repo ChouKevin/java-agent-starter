@@ -13,3 +13,7 @@ semantic:
       mode: LOCAL_FIXTURE
       display-name: M7 Knowledge Query Fixture
       path: /fixtures/m7-knowledge-query
+    payment-knowledge-query:
+      mode: LOCAL_FIXTURE
+      display-name: Payment Knowledge Query Fixture
+      path: /fixtures/payment-knowledge-query

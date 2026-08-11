@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the one-shot M7 live knowledge query acceptance scenario.
+# Run a closed live knowledge acceptance scenario.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -12,6 +12,8 @@ SEMANTIC_SHA=""
 GOOGLE_MODEL=""
 FIXTURE_REVISION=""
 KNOWLEDGE_SEED=""
+FIXTURE_ID=""
+TEST_CLASS=""
 
 fail() {
     printf 'knowledge-uat: %s\n' "$*" >&2
@@ -50,7 +52,7 @@ read_live_configuration() {
     validation_key="${validation_key%"${validation_key##*[![:space:]]}"}"
     normalized_key="$(tr '[:upper:]' '[:lower:]' <<< "${validation_key}")"
     [[ -n "${validation_key}" ]] \
-        || fail "GOOGLE_API_KEY must be configured for a live M7 run"
+        || fail "GOOGLE_API_KEY must be configured for a live knowledge run"
     case "${normalized_key}" in
         poc-*|example|example-*|replace-me|replace-*|your-*|changeme|change-me|test-*|fake-*|dummy-*)
             fail "GOOGLE_API_KEY must be a live provider credential, not a placeholder"
@@ -98,6 +100,45 @@ create_run_directory() {
     RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
     RUN_DIRECTORY="${ROOT}/reports/knowledge-uat/${RUN_ID}"
     mkdir -p "${RUN_DIRECTORY}"
+    export M7_RUN_ID="${RUN_ID}"
+    export KNOWLEDGE_RUN_ID="${RUN_ID}"
+    export KNOWLEDGE_REPORT_DIRECTORY="${RUN_DIRECTORY}"
+}
+
+select_knowledge_scenario() {
+    local requested_scenario
+
+    requested_scenario="$(operator_value KNOWLEDGE_SCENARIO)"
+    case "${requested_scenario:-m7}" in
+        m7)
+            KNOWLEDGE_SCENARIO=m7
+            FIXTURE_ID=m7-knowledge-query
+            TEST_CLASS=M7KnowledgeQueryLiveIT
+            M7_KNOWLEDGE_LIVE=true
+            PAYMENT_KNOWLEDGE_LIVE=false
+            ;;
+        payment)
+            KNOWLEDGE_SCENARIO=payment
+            FIXTURE_ID=payment-knowledge-query
+            TEST_CLASS=PaymentKnowledgeLiveIT
+            M7_KNOWLEDGE_LIVE=false
+            PAYMENT_KNOWLEDGE_LIVE=true
+            ;;
+        *)
+            fail "KNOWLEDGE_SCENARIO must be one of: m7, payment"
+            ;;
+    esac
+
+    case "${KNOWLEDGE_SCENARIO}:${FIXTURE_ID}:${TEST_CLASS}:${M7_KNOWLEDGE_LIVE}:${PAYMENT_KNOWLEDGE_LIVE}" in
+        m7:m7-knowledge-query:M7KnowledgeQueryLiveIT:true:false|payment:payment-knowledge-query:PaymentKnowledgeLiveIT:false:true)
+            ;;
+        *)
+            fail "knowledge scenario selection is invalid"
+            ;;
+    esac
+    export KNOWLEDGE_SCENARIO FIXTURE_ID TEST_CLASS M7_KNOWLEDGE_LIVE PAYMENT_KNOWLEDGE_LIVE
+    export KNOWLEDGE_FIXTURE_ID="${FIXTURE_ID}"
+    export KNOWLEDGE_TEST_CLASS="${TEST_CLASS}"
 }
 
 select_knowledge_seed() {
@@ -168,6 +209,9 @@ read_deployed_revisions() {
     SEMANTIC_SHA="$(deployment_sha 'Semantic source SHA')"
     export M7_AGENT_SOURCE_SHA="${AGENT_SHA}"
     export M7_SEMANTIC_SOURCE_SHA="${SEMANTIC_SHA}"
+    export KNOWLEDGE_AGENT_SOURCE_SHA="${AGENT_SHA}"
+    export KNOWLEDGE_SEMANTIC_SOURCE_SHA="${SEMANTIC_SHA}"
+    export KNOWLEDGE_STARTER_SOURCE_SHA="${STARTER_SHA}"
 }
 
 fixture_revision() {
@@ -200,7 +244,7 @@ reset_knowledge_runtime() {
     knowledge_compose stop semantic-service
     if ! knowledge_compose_run knowledge-fixture-init; then
         knowledge_compose up --detach --wait semantic-service || true
-        fail "could not reset the M7 fixture and JDT workspace"
+        fail "could not reset the knowledge fixtures and JDT workspaces"
     fi
     knowledge_compose up --detach --wait semantic-service
     knowledge_compose --profile tools run --rm network-probe
@@ -209,14 +253,13 @@ reset_knowledge_runtime() {
 ensure_knowledge_fixture_and_database() {
     local response
 
-    export M7_RUN_ID="${RUN_ID}"
     export HOST_UID="$(id -u)"
     export HOST_GID="$(id -g)"
     export STARTER_ROOT="${ROOT}"
     reset_knowledge_runtime
     knowledge_compose_run knowledge-db-init
-    "${ROOT}/repository.sh" ensure m7-knowledge-query
-    response="$("${ROOT}/repository.sh" revision m7-knowledge-query)"
+    "${ROOT}/repository.sh" ensure "${FIXTURE_ID}"
+    response="$("${ROOT}/repository.sh" revision "${FIXTURE_ID}")"
     FIXTURE_REVISION="$(fixture_revision "${response}")"
 }
 
@@ -230,10 +273,10 @@ run_live_scenario() {
 }
 
 validate_junit() {
-    local junit_file="${RUN_DIRECTORY}/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml"
+    local junit_file="${RUN_DIRECTORY}/TEST-com.java.system.agent.${TEST_CLASS}.xml"
 
-    [[ -f "${junit_file}" ]] || fail "M7 JUnit report is missing: ${junit_file}"
-    command -v python3 >/dev/null 2>&1 || fail "python3 is required to validate the M7 JUnit report"
+    [[ -f "${junit_file}" ]] || fail "knowledge JUnit report is missing: ${junit_file}"
+    command -v python3 >/dev/null 2>&1 || fail "python3 is required to validate the knowledge JUnit report"
     if ! python3 - "${junit_file}" <<'PY'
 import sys
 import xml.etree.ElementTree as element_tree
@@ -250,7 +293,7 @@ expected_attributes = {"tests": "1", "failures": "0", "errors": "0", "skipped": 
 sys.exit(0 if all(root.attrib.get(key) == value for key, value in expected_attributes.items()) else 1)
 PY
     then
-        fail "M7 JUnit testsuite must be exactly tests=1 failures=0 errors=0 skipped=0"
+        fail "knowledge JUnit testsuite must be exactly tests=1 failures=0 errors=0 skipped=0"
     fi
 }
 
@@ -260,7 +303,8 @@ write_manifest() {
         printf 'starterSourceSha=%s\n' "${STARTER_SHA}"
         printf 'agentSourceSha=%s\n' "${AGENT_SHA}"
         printf 'semanticSourceSha=%s\n' "${SEMANTIC_SHA}"
-        printf 'fixtureId=m7-knowledge-query\n'
+        printf 'scenario=%s\n' "${KNOWLEDGE_SCENARIO}"
+        printf 'fixtureId=%s\n' "${FIXTURE_ID}"
         printf 'fixtureRevision=%s\n' "${FIXTURE_REVISION}"
         printf 'model=%s\n' "${GOOGLE_MODEL}"
         printf 'knowledgeSeed=%s\n' "${KNOWLEDGE_SEED}"
@@ -269,6 +313,7 @@ write_manifest() {
 
 main() {
     preflight
+    select_knowledge_scenario
     read_live_configuration
     create_run_directory
     select_knowledge_seed

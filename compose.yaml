@@ -61,6 +61,7 @@ services:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
       - semantic-fixture:/fixtures/m6-semantic-contract
       - knowledge-fixture:/fixtures/m7-knowledge-query
+      - payment-knowledge-fixture:/fixtures/payment-knowledge-query
       - ${STARTER_ROOT}/data/repositories:/data/repos
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
     restart: unless-stopped
@@ -121,14 +122,19 @@ services:
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        mkdir -p /data/jdtls/m7-knowledge-query &&
+        mkdir -p /data/jdtls/m7-knowledge-query /data/jdtls/payment-knowledge-query &&
         find /fixtures/m7-knowledge-query -mindepth 1 -delete &&
+        find /fixtures/payment-knowledge-query -mindepth 1 -delete &&
         find /data/jdtls/m7-knowledge-query -mindepth 1 -delete &&
+        find /data/jdtls/payment-knowledge-query -mindepth 1 -delete &&
         cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/ &&
-        chown -R 10001:10001 /fixtures/m7-knowledge-query /data/jdtls/m7-knowledge-query
+        cp -a /fixture-source/payment-knowledge-query/. /fixtures/payment-knowledge-query/ &&
+        chown -R 10001:10001 /fixtures/m7-knowledge-query /fixtures/payment-knowledge-query /data/jdtls/m7-knowledge-query /data/jdtls/payment-knowledge-query
     volumes:
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/payment-knowledge-query:/fixture-source/payment-knowledge-query:ro
       - knowledge-fixture:/fixtures/m7-knowledge-query
+      - payment-knowledge-fixture:/fixtures/payment-knowledge-query
       - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
     restart: "no"
     networks: [agent-network]
@@ -148,8 +154,8 @@ services:
     command:
       - >-
         export PGPASSWORD="$$POSTGRES_PASSWORD"; export PGHOST=postgres; export PGDATABASE=postgres;
-        dropdb -U "$$POSTGRES_USER" --if-exists --force agent_m7_knowledge;
-        createdb -U "$$POSTGRES_USER" agent_m7_knowledge
+        dropdb -U "$$POSTGRES_USER" --if-exists --force agent_knowledge_live;
+        createdb -U "$$POSTGRES_USER" agent_knowledge_live
     restart: "no"
     networks: [agent-network]
 
@@ -227,15 +233,24 @@ services:
       knowledge-db-init:
         condition: service_completed_successfully
     environment:
-      M7_KNOWLEDGE_LIVE: "true"
+      M7_KNOWLEDGE_LIVE: ${M7_KNOWLEDGE_LIVE}
+      PAYMENT_KNOWLEDGE_LIVE: ${PAYMENT_KNOWLEDGE_LIVE}
       M7_KNOWLEDGE_SEED: ${M7_KNOWLEDGE_SEED}
       M7_AGENT_SOURCE_SHA: ${M7_AGENT_SOURCE_SHA}
       M7_SEMANTIC_SOURCE_SHA: ${M7_SEMANTIC_SOURCE_SHA}
+      KNOWLEDGE_SCENARIO: ${KNOWLEDGE_SCENARIO}
+      KNOWLEDGE_FIXTURE_ID: ${KNOWLEDGE_FIXTURE_ID}
+      KNOWLEDGE_TEST_CLASS: ${KNOWLEDGE_TEST_CLASS}
+      KNOWLEDGE_RUN_ID: ${KNOWLEDGE_RUN_ID}
+      KNOWLEDGE_REPORT_DIRECTORY: /reports
+      KNOWLEDGE_AGENT_SOURCE_SHA: ${KNOWLEDGE_AGENT_SOURCE_SHA}
+      KNOWLEDGE_SEMANTIC_SOURCE_SHA: ${KNOWLEDGE_SEMANTIC_SOURCE_SHA}
+      KNOWLEDGE_STARTER_SOURCE_SHA: ${KNOWLEDGE_STARTER_SOURCE_SHA}
       M7_REPORT_DIRECTORY: /reports
       CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080
       CODEBASE_SERVICE_API_TOKEN: ${SEMANTIC_API_TOKEN}
       SPRING_PROFILES_ACTIVE: agent-runtime
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/agent_m7_knowledge
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/agent_knowledge_live
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY}
@@ -246,10 +261,10 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        mvn --batch-mode --no-transfer-progress clean test -Dtest=M7KnowledgeQueryLiveIT;
+        mvn --batch-mode --no-transfer-progress clean test -Dtest=$${KNOWLEDGE_TEST_CLASS};
         maven_status=$$?;
         mkdir -p /reports;
-        cp /workspace/target/surefire-reports/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml /reports/;
+        cp /workspace/target/surefire-reports/TEST-com.java.system.agent.$${KNOWLEDGE_TEST_CLASS}.xml /reports/;
         copy_status=$$?;
         chown -R "$$HOST_UID:$$HOST_GID" /reports;
         ownership_status=$$?;
@@ -261,7 +276,7 @@ services:
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro
       - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro
       - maven-cache:/root/.m2
-      - ${STARTER_ROOT}/reports/knowledge-uat/${M7_RUN_ID}:/reports
+      - ${KNOWLEDGE_REPORT_DIRECTORY}:/reports
     restart: "no"
     networks: [agent-network]
 
@@ -271,6 +286,7 @@ volumes:
   agent-contract-workspace:
   semantic-fixture:
   knowledge-fixture:
+  payment-knowledge-fixture:
   agent-knowledge-workspace:
   maven-cache:
 

@@ -32,14 +32,17 @@ assert_fails() {
 }
 
 bash -n "${ROOT}/knowledge-uat.sh"
-bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory select_knowledge_seed read_deployed_revisions active_deployment_state fixture_revision knowledge_compose reset_knowledge_runtime ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
+bash -n "${ROOT}/payment-uat.sh"
+[[ -x "${ROOT}/payment-uat.sh" ]]
+bash -c 'source "$1"; declare -F main preflight read_live_configuration create_run_directory select_knowledge_scenario select_knowledge_seed read_deployed_revisions active_deployment_state fixture_revision knowledge_compose reset_knowledge_runtime ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' \
     bash "${ROOT}/knowledge-uat.sh"
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/knowledge-uat.sh"
 grep -Fq 'gemini-3.1-flash-lite' "${ROOT}/knowledge-uat.sh"
 grep -Fq 'reports/knowledge-uat/${RUN_ID}' "${ROOT}/knowledge-uat.sh"
 grep -Fq '"${ROOT}/deploy.sh"' "${ROOT}/knowledge-uat.sh"
-grep -Fq 'repository.sh" ensure m7-knowledge-query' "${ROOT}/knowledge-uat.sh"
+grep -Fq 'repository.sh" ensure "${FIXTURE_ID}"' "${ROOT}/knowledge-uat.sh"
 ! rg -q 'SLACK_' "${ROOT}/knowledge-uat.sh"
+! rg -q 'SLACK_|GOOGLE_|prompt|question|answer' "${ROOT}/payment-uat.sh"
 ! rg -q '^[[:space:]]*(while|for)[[:space:]]' "${ROOT}/knowledge-uat.sh"
 [[ "$(grep -Fc 'run --rm --no-deps agent-knowledge' "${ROOT}/knowledge-uat.sh")" -eq 1 ]]
 grep -Fq 'reset_knowledge_runtime' "${ROOT}/knowledge-uat.sh"
@@ -57,6 +60,7 @@ ORIGINAL_ROOT="${ROOT}"
 ROOT="${TEST_ROOT}"
 ENV_FILE="${TEST_ROOT}/.env"
 unset GOOGLE_API_KEY GOOGLE_GENAI_MODEL
+unset KNOWLEDGE_SCENARIO
 preflight
 assert_fails "blank API key fails before Docker or deployment" read_live_configuration
 printf 'GOOGLE_API_KEY=   \n' > "${TEST_ROOT}/.env"
@@ -94,6 +98,30 @@ source "${ORIGINAL_ROOT}/knowledge-uat.sh"
 ROOT="${TEST_ROOT}"
 ENV_FILE="${TEST_ROOT}/.env"
 
+unset KNOWLEDGE_SCENARIO
+select_knowledge_scenario
+assert_equals m7 "${KNOWLEDGE_SCENARIO}" "unset scenario defaults to M7"
+assert_equals m7-knowledge-query "${FIXTURE_ID}" "M7 fixture selection"
+assert_equals M7KnowledgeQueryLiveIT "${TEST_CLASS}" "M7 test class selection"
+assert_equals m7-knowledge-query "${KNOWLEDGE_FIXTURE_ID}" "M7 fixture ID export"
+assert_equals M7KnowledgeQueryLiveIT "${KNOWLEDGE_TEST_CLASS}" "M7 test class export"
+assert_equals true "${M7_KNOWLEDGE_LIVE}" "M7 live flag is enabled"
+assert_equals false "${PAYMENT_KNOWLEDGE_LIVE}" "payment live flag is disabled for M7"
+KNOWLEDGE_SCENARIO=payment
+export KNOWLEDGE_SCENARIO
+select_knowledge_scenario
+assert_equals payment "${KNOWLEDGE_SCENARIO}" "payment scenario selection"
+assert_equals payment-knowledge-query "${FIXTURE_ID}" "payment fixture selection"
+assert_equals PaymentKnowledgeLiveIT "${TEST_CLASS}" "payment test class selection"
+assert_equals payment-knowledge-query "${KNOWLEDGE_FIXTURE_ID}" "payment fixture ID export"
+assert_equals PaymentKnowledgeLiveIT "${KNOWLEDGE_TEST_CLASS}" "payment test class export"
+assert_equals false "${M7_KNOWLEDGE_LIVE}" "M7 live flag is disabled for payment"
+assert_equals true "${PAYMENT_KNOWLEDGE_LIVE}" "payment live flag is enabled"
+KNOWLEDGE_SCENARIO=unsupported
+export KNOWLEDGE_SCENARIO
+assert_fails "unsupported scenario fails before Compose" select_knowledge_scenario
+unset KNOWLEDGE_SCENARIO
+
 starter_sha() {
     printf '%s' "${TEST_STARTER_SHA}"
 }
@@ -112,12 +140,18 @@ deployment_sha() {
     esac
 }
 
-unset M7_AGENT_SOURCE_SHA M7_SEMANTIC_SOURCE_SHA
+unset M7_AGENT_SOURCE_SHA M7_SEMANTIC_SOURCE_SHA KNOWLEDGE_AGENT_SOURCE_SHA KNOWLEDGE_SEMANTIC_SOURCE_SHA KNOWLEDGE_STARTER_SOURCE_SHA
 read_deployed_revisions
 assert_equals "${TEST_AGENT_SHA}" "${M7_AGENT_SOURCE_SHA}" \
     "Agent deployment SHA reaches the live test environment"
 assert_equals "${TEST_SEMANTIC_SHA}" "${M7_SEMANTIC_SOURCE_SHA}" \
     "Semantic deployment SHA reaches the live test environment"
+assert_equals "${TEST_AGENT_SHA}" "${KNOWLEDGE_AGENT_SOURCE_SHA}" \
+    "Agent deployment SHA reaches the selected live test environment"
+assert_equals "${TEST_SEMANTIC_SHA}" "${KNOWLEDGE_SEMANTIC_SOURCE_SHA}" \
+    "Semantic deployment SHA reaches the selected live test environment"
+assert_equals "${TEST_STARTER_SHA}" "${KNOWLEDGE_STARTER_SOURCE_SHA}" \
+    "Starter deployment SHA reaches the selected live test environment"
 
 FAKE_BIN_DIRECTORY="${TEMPORARY_DIRECTORY}/fake-bin"
 FAKE_DOCKER_ENVIRONMENTS="${TEMPORARY_DIRECTORY}/docker-environments"
@@ -125,7 +159,7 @@ FAKE_DOCKER_INVOCATIONS="${TEMPORARY_DIRECTORY}/docker-invocations"
 mkdir -p "${FAKE_BIN_DIRECTORY}"
 printf '%s\n' \
     '#!/usr/bin/env bash' \
-    'printf "%s\\n" "${M7_KNOWLEDGE_SEED:-}" >> "${FAKE_DOCKER_ENVIRONMENTS}"' \
+    'printf "%s|%s|%s|%s|%s|%s\\n" "${KNOWLEDGE_SCENARIO:-}" "${FIXTURE_ID:-}" "${TEST_CLASS:-}" "${M7_KNOWLEDGE_LIVE:-}" "${PAYMENT_KNOWLEDGE_LIVE:-}" "${M7_KNOWLEDGE_SEED:-}" >> "${FAKE_DOCKER_ENVIRONMENTS}"' \
     'printf "%s\\n" "$*" >> "${FAKE_DOCKER_INVOCATIONS}"' \
     > "${FAKE_BIN_DIRECTORY}/docker"
 chmod +x "${FAKE_BIN_DIRECTORY}/docker"
@@ -135,6 +169,16 @@ PATH="${FAKE_BIN_DIRECTORY}:${PATH}"
 
 : > "${FAKE_DOCKER_INVOCATIONS}"
 unset M7_KNOWLEDGE_SEED
+
+: > "${FAKE_DOCKER_INVOCATIONS}"
+KNOWLEDGE_SCENARIO=unsupported
+export KNOWLEDGE_SCENARIO
+assert_fails "invalid scenario stops main before Docker" main
+[[ ! -s "${FAKE_DOCKER_INVOCATIONS}" ]] || {
+    printf 'invalid scenario reached Docker Compose\n' >&2
+    exit 1
+}
+unset KNOWLEDGE_SCENARIO
 printf 'GOOGLE_API_KEY=live-key\n' > "${TEST_ROOT}/.env"
 M7_KNOWLEDGE_SEED=invalid
 export M7_KNOWLEDGE_SEED
@@ -175,12 +219,22 @@ RUN_ID=knowledge-seed-explicit
 KNOWLEDGE_SEED=""
 M7_KNOWLEDGE_SEED=42
 export M7_KNOWLEDGE_SEED
+unset KNOWLEDGE_SCENARIO
+select_knowledge_scenario
 select_knowledge_seed
 assert_equals 42 "${KNOWLEDGE_SEED}" "explicit nonnegative knowledge seed"
 run_live_scenario
-assert_equals 42 "$(cat "${FAKE_DOCKER_ENVIRONMENTS}")" \
-    "explicit knowledge seed reaches Docker Compose agent test invocation"
+assert_equals 'm7|m7-knowledge-query|M7KnowledgeQueryLiveIT|true|false|42' "$(cat "${FAKE_DOCKER_ENVIRONMENTS}")" \
+    "M7 selection and seed reach Docker Compose agent test invocation"
 grep -Fq 'run --rm --no-deps agent-knowledge' "${FAKE_DOCKER_INVOCATIONS}"
+KNOWLEDGE_SCENARIO=payment
+export KNOWLEDGE_SCENARIO
+select_knowledge_scenario
+: > "${FAKE_DOCKER_ENVIRONMENTS}"
+run_live_scenario
+assert_equals 'payment|payment-knowledge-query|PaymentKnowledgeLiveIT|false|true|42' "$(cat "${FAKE_DOCKER_ENVIRONMENTS}")" \
+    "payment selection and exclusive live flags reach Docker Compose agent test invocation"
+unset KNOWLEDGE_SCENARIO
 unset M7_KNOWLEDGE_SEED
 
 assert_equals FIXTURE "$(fixture_revision '{"currentRevision":"FIXTURE"}')" "exact fixture revision"
@@ -196,25 +250,33 @@ AGENT_SHA="${TEST_AGENT_SHA}"
 SEMANTIC_SHA="${TEST_SEMANTIC_SHA}"
 GOOGLE_MODEL=gemini-3.1-flash-lite
 FIXTURE_REVISION=FIXTURE
+KNOWLEDGE_SCENARIO=m7
+FIXTURE_ID=m7-knowledge-query
+TEST_CLASS=M7KnowledgeQueryLiveIT
 write_manifest
 grep -Fq "runId=${RUN_ID}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq "starterSourceSha=${STARTER_SHA}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq "agentSourceSha=${AGENT_SHA}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq "semanticSourceSha=${SEMANTIC_SHA}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq 'fixtureId=m7-knowledge-query' "${RUN_DIRECTORY}/manifest.txt"
+grep -Fq 'scenario=m7' "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq 'fixtureRevision=FIXTURE' "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq "model=${GOOGLE_MODEL}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fxq 'knowledgeSeed=17' "${RUN_DIRECTORY}/manifest.txt"
 ! rg -q 'budgetHandleCount' "${RUN_DIRECTORY}/manifest.txt"
 ! rg -qi 'key|token|prompt|question|evidence|reason|environment' "${RUN_DIRECTORY}/manifest.txt"
 
-JUNIT_FILE="${RUN_DIRECTORY}/TEST-com.java.system.agent.M7KnowledgeQueryLiveIT.xml"
+JUNIT_FILE="${RUN_DIRECTORY}/TEST-com.java.system.agent.${TEST_CLASS}.xml"
 printf '<testsuite tests="1" failures="0" errors="0" skipped="0"/>\n' > "${JUNIT_FILE}"
 validate_junit
 printf '<testsuite tests="1" failures="0" errors="0" skipped="1"/>\n' > "${JUNIT_FILE}"
 assert_fails "skipped JUnit test fails the run" validate_junit
 printf '<testsuite tests="1" failures="0" errors="0"><properties><property skipped="0"/></properties></testsuite>\n' > "${JUNIT_FILE}"
 assert_fails "JUnit decoy attributes outside the testsuite root fail the run" validate_junit
+TEST_CLASS=PaymentKnowledgeLiveIT
+JUNIT_FILE="${RUN_DIRECTORY}/TEST-com.java.system.agent.${TEST_CLASS}.xml"
+printf '<testsuite tests="1" failures="0" errors="0" skipped="0"/>\n' > "${JUNIT_FILE}"
+validate_junit
 
 DEPLOY_INVOCATIONS="${TEMPORARY_DIRECTORY}/deploy-invocations"
 printf '#!/usr/bin/env bash\nprintf deploy >> "%s"\n' "${DEPLOY_INVOCATIONS}" > "${TEST_ROOT}/deploy.sh"
@@ -244,7 +306,7 @@ knowledge_compose() {
 reset_knowledge_runtime
 assert_equals $'stop semantic-service\nrun --rm knowledge-fixture-init\nup --detach --wait semantic-service\n--profile tools run --rm network-probe' \
     "$(cat "${RUNTIME_RESET_INVOCATIONS}")" \
-    "Semantic stops before the exact M7 runtime reset and returns healthy afterwards"
+    "Semantic stops before the exact knowledge runtime reset and returns healthy afterwards"
 
 INVOCATIONS="${TEMPORARY_DIRECTORY}/invocations"
 preflight() {
@@ -252,6 +314,9 @@ preflight() {
 }
 read_live_configuration() {
     :
+}
+select_knowledge_scenario() {
+    printf 'select-scenario\n' >> "${INVOCATIONS}"
 }
 create_run_directory() {
     RUN_ID=orchestration-test
@@ -287,7 +352,7 @@ validate_junit() {
 
 : > "${INVOCATIONS}"
 main
-assert_equals $'preflight\nreport-directory\nselect-seed\ndeploy\nrevisions\nfixture-db\nmanifest\nlive-run\nvalidate-junit' \
+assert_equals $'preflight\nselect-scenario\nreport-directory\nselect-seed\ndeploy\nrevisions\nfixture-db\nmanifest\nlive-run\nvalidate-junit' \
     "$(cat "${INVOCATIONS}")" \
     "preflight precedes every Docker-mutating stage and the live scenario runs once"
 
