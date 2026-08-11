@@ -246,6 +246,7 @@ main() {
     semantic_ref="$(env_or_default SEMANTIC_GIT_REF uat)"
 
     export STARTER_ROOT="${ROOT}"
+    export KNOWLEDGE_REPORT_DIRECTORY="${KNOWLEDGE_REPORT_DIRECTORY:-${ROOT}/reports/knowledge-uat/deploy-placeholder}"
     compose=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
     compose_rows="$("${compose[@]}" ps --all --format '{{.Service}}|{{.State}}|{{.Health}}')"
     preflight_active_deployment \

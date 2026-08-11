@@ -163,6 +163,7 @@ grep -Fq 'TEST-com.java.system.agent.$${KNOWLEDGE_TEST_CLASS}.xml' "${ROOT}/comp
 grep -Fq 'mvn --batch-mode --no-transfer-progress clean test -Dtest=$${KNOWLEDGE_TEST_CLASS}' "${ROOT}/compose.yaml"
 [[ "$(grep -Fc 'mvn --batch-mode --no-transfer-progress clean test -Dtest=$${KNOWLEDGE_TEST_CLASS}' "${ROOT}/compose.yaml")" -eq 1 ]]
 grep -Fq '${KNOWLEDGE_REPORT_DIRECTORY}:/reports' "${ROOT}/compose.yaml"
+grep -Fq 'export KNOWLEDGE_REPORT_DIRECTORY="${KNOWLEDGE_REPORT_DIRECTORY:-${ROOT}/reports/knowledge-uat/deploy-placeholder}"' "${ROOT}/deploy.sh"
 ! rg -q 'SLACK_' <(awk '/^  agent-knowledge:/{inside=1; next} /^  [^[:space:]]/{inside=0} inside' "${ROOT}/compose.yaml")
 
 awk '
