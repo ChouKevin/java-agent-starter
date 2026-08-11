@@ -170,6 +170,7 @@ prepare_contract_environment() {
     export HOST_UID="$(id -u)"
     export HOST_GID="$(id -g)"
     export STARTER_ROOT="${ROOT}"
+    export KNOWLEDGE_REPORT_DIRECTORY="${RUN_DIRECTORY}"
 }
 
 run_contract_phase() {

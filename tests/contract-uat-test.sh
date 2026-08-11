@@ -71,6 +71,11 @@ AGENT_FIXTURE_SHA="${AGENT_TEST_SHA}"
 DISCOVERY_FIXTURE_REVISION=FIXTURE
 mkdir -p "${RUN_DIRECTORY}"
 
+unset KNOWLEDGE_REPORT_DIRECTORY
+prepare_contract_environment
+assert_equals "${RUN_DIRECTORY}" "${KNOWLEDGE_REPORT_DIRECTORY}" \
+    "contract compose interpolation must always receive a report directory"
+
 write_manifest
 grep -Fq "runId=${RUN_ID}" "${RUN_DIRECTORY}/manifest.txt"
 grep -Fq "agentSourceSha=${AGENT_SHA}" "${RUN_DIRECTORY}/manifest.txt"
