@@ -62,6 +62,8 @@ fi
 grep -Fq 'uat logs -f semantic-service' "${ROOT}/README.md"
 grep -Fq 'uat logs -f java-system-agent' "${ROOT}/README.md"
 grep -Fq 'bounded `json-file` rotation' "${ROOT}/README.md"
+grep -Fq 'AGENT_REPOSITORY_ID' "${ROOT}/README.md"
+grep -Fq 'AGENT_REPOSITORY_ID=java-system-agent' "${ROOT}/.env.example"
 
 grep -Fq 'x-contract-runner: &contract-runner' "${ROOT}/compose.yaml"
 grep -Fq 'image: maven:3.9.11-eclipse-temurin-21' "${ROOT}/compose.yaml"
@@ -72,6 +74,12 @@ grep -Fq 'M6_AGENT_REPO_ID: ${M6_AGENT_REPO_ID:-java-system-agent}' "${ROOT}/com
 grep -Fq 'M6_AGENT_EXPECTED_REVISION: ${M6_AGENT_EXPECTED_REVISION:-}' "${ROOT}/compose.yaml"
 grep -Fq 'M6_DISCOVERY_REPO_ID: ${M6_DISCOVERY_REPO_ID:-m6-semantic-contract}' "${ROOT}/compose.yaml"
 grep -Fq 'M6_DISCOVERY_EXPECTED_REVISION: ${M6_DISCOVERY_EXPECTED_REVISION:-FIXTURE}' "${ROOT}/compose.yaml"
+JAVA_SYSTEM_AGENT="$(awk '
+  /^  java-system-agent:$/ { inside = 1; print; next }
+  inside && /^  [^[:space:]]/ { exit }
+  inside { print }
+' "${ROOT}/compose.yaml")"
+grep -Fq 'AGENT_REPOSITORY_ID: ${AGENT_REPOSITORY_ID:-java-system-agent}' <<< "${JAVA_SYSTEM_AGENT}"
 [[ "$(grep -cE '^    M6_(SEMANTIC_BASE_URL|SEMANTIC_API_TOKEN|AGENT_REPO_ID|AGENT_EXPECTED_REVISION|DISCOVERY_REPO_ID|DISCOVERY_EXPECTED_REVISION):' "${ROOT}/compose.yaml")" -eq 6 ]]
 ! rg -q 'M5_' "${ROOT}/compose.yaml" "${ROOT}/contract-uat.sh"
 grep -Fq 'semantic-contract:' "${ROOT}/compose.yaml"
@@ -149,6 +157,13 @@ grep -Fq 'jdbc:postgresql://postgres:5432/agent_knowledge_live' "${ROOT}/compose
 grep -Fq 'M7_KNOWLEDGE_LIVE: ${M7_KNOWLEDGE_LIVE}' "${ROOT}/compose.yaml"
 grep -Fq 'PAYMENT_KNOWLEDGE_LIVE: ${PAYMENT_KNOWLEDGE_LIVE}' "${ROOT}/compose.yaml"
 grep -Fq 'KNOWLEDGE_FIXTURE_ID: ${KNOWLEDGE_FIXTURE_ID}' "${ROOT}/compose.yaml"
+AGENT_KNOWLEDGE="$(awk '
+  /^  agent-knowledge:$/ { inside = 1; print; next }
+  inside && /^  [^[:space:]]/ { exit }
+  inside { print }
+' "${ROOT}/compose.yaml")"
+grep -Fq 'AGENT_REPOSITORY_ID: ${KNOWLEDGE_FIXTURE_ID}' <<< "${AGENT_KNOWLEDGE}"
+[[ "$(grep -Fc 'AGENT_REPOSITORY_ID:' "${ROOT}/compose.yaml")" -eq 2 ]]
 grep -Fq 'KNOWLEDGE_TEST_CLASS: ${KNOWLEDGE_TEST_CLASS}' "${ROOT}/compose.yaml"
 grep -Fq 'KNOWLEDGE_AGENT_SOURCE_SHA: ${KNOWLEDGE_AGENT_SOURCE_SHA}' "${ROOT}/compose.yaml"
 grep -Fq 'KNOWLEDGE_SEMANTIC_SOURCE_SHA: ${KNOWLEDGE_SEMANTIC_SOURCE_SHA}' "${ROOT}/compose.yaml"

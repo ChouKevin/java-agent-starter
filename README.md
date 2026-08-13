@@ -15,6 +15,8 @@ not expose it to an untrusted network without a separate TLS and security design
 
 Requirements: Git, Docker Engine with Compose v2, and SSH access to the two GitHub repositories.
 No manual environment value is required for the default `agent-runtime` smoke deployment.
+The Agent uses `AGENT_REPOSITORY_ID=java-system-agent` by default; change it in `.env` only when
+the runtime should query another configured repository.
 
 ```bash
 git clone git@github.com:ChouKevin/java-agent-starter.git

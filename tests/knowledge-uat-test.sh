@@ -104,6 +104,11 @@ assert_equals m7 "${KNOWLEDGE_SCENARIO}" "unset scenario defaults to M7"
 assert_equals m7-knowledge-query "${FIXTURE_ID}" "M7 fixture selection"
 assert_equals M7KnowledgeQueryLiveIT "${TEST_CLASS}" "M7 test class selection"
 assert_equals m7-knowledge-query "${KNOWLEDGE_FIXTURE_ID}" "M7 fixture ID export"
+[[ -n "${KNOWLEDGE_FIXTURE_ID}" ]] || {
+    printf 'M7 fixture ID must be nonblank before Compose\n' >&2
+    exit 1
+}
+export -p | grep -Fq 'declare -x KNOWLEDGE_FIXTURE_ID="m7-knowledge-query"'
 assert_equals M7KnowledgeQueryLiveIT "${KNOWLEDGE_TEST_CLASS}" "M7 test class export"
 assert_equals true "${M7_KNOWLEDGE_LIVE}" "M7 live flag is enabled"
 assert_equals false "${PAYMENT_KNOWLEDGE_LIVE}" "payment live flag is disabled for M7"
@@ -114,6 +119,11 @@ assert_equals payment "${KNOWLEDGE_SCENARIO}" "payment scenario selection"
 assert_equals payment-knowledge-query "${FIXTURE_ID}" "payment fixture selection"
 assert_equals PaymentKnowledgeLiveIT "${TEST_CLASS}" "payment test class selection"
 assert_equals payment-knowledge-query "${KNOWLEDGE_FIXTURE_ID}" "payment fixture ID export"
+[[ -n "${KNOWLEDGE_FIXTURE_ID}" ]] || {
+    printf 'payment fixture ID must be nonblank before Compose\n' >&2
+    exit 1
+}
+export -p | grep -Fq 'declare -x KNOWLEDGE_FIXTURE_ID="payment-knowledge-query"'
 assert_equals PaymentKnowledgeLiveIT "${KNOWLEDGE_TEST_CLASS}" "payment test class export"
 assert_equals false "${M7_KNOWLEDGE_LIVE}" "M7 live flag is disabled for payment"
 assert_equals true "${PAYMENT_KNOWLEDGE_LIVE}" "payment live flag is enabled"
