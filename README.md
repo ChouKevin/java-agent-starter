@@ -28,6 +28,21 @@ runs an authenticated Semantic API probe, and writes exact source SHAs to
 `deployment-record.txt`. Later runs accept only clean checkouts on the configured branch and update
 them by fast-forward; they never reset, rebase, overwrite, or discard local work.
 
+### Agent-only prompt update
+
+Prompt files under Java System Agent `src/main/resources/prompts/` are packaged in the Agent JAR
+and loaded when the Agent starts. After merging a prompt-only Agent change to the configured branch,
+run:
+
+```bash
+./deploy.sh --agent-only
+```
+
+This requires an already healthy, deployment-record-consistent stack. It fast-forwards and rebuilds
+only Java System Agent, recreates only its container, and leaves PostgreSQL and Semantic Service
+running. Use the default `./deploy.sh` for first deployment, Semantic or stack configuration changes,
+or recovery from a degraded or inconsistent stack.
+
 ## M6 contract gate
 
 Run `./contract-uat.sh` to deploy the selected service revisions and execute the revision-pinned

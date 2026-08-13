@@ -12,6 +12,21 @@ fail() {
     exit 1
 }
 
+parse_deployment_mode() {
+    case "$#" in
+        0)
+            printf 'FULL'
+            ;;
+        1)
+            [[ "$1" == "--agent-only" ]] || fail "usage: ./deploy.sh [--agent-only]"
+            printf 'AGENT_ONLY'
+            ;;
+        *)
+            fail "usage: ./deploy.sh [--agent-only]"
+            ;;
+    esac
+}
+
 env_value() {
     local key="$1"
     local line
@@ -206,6 +221,24 @@ preflight_active_deployment() {
     esac
 }
 
+preflight_agent_only_deployment() {
+    local rows="$1"
+    local record_file="$2"
+    local agent_directory="$3"
+    local semantic_directory="$4"
+    local deployment_state
+
+    deployment_state="$(classify_active_deployment_state \
+        "${rows}" "${record_file}" "${agent_directory}" "${semantic_directory}")"
+    if [[ "${deployment_state}" == "ABSENT" ]]; then
+        printf 'deploy: agent-only deployment requires an active healthy stack; run ./deploy.sh first\n' >&2
+        return 1
+    fi
+
+    preflight_active_deployment \
+        "${rows}" "${record_file}" "${agent_directory}" "${semantic_directory}"
+}
+
 prepare_host_paths() {
     mkdir -p \
         "${SOURCES_DIR}" \
@@ -227,12 +260,14 @@ write_deployment_record() {
 main() {
     local agent_url
     local agent_ref
+    local deployment_mode
     local semantic_url
     local semantic_ref
     local token
     local compose_rows
     local -a compose
 
+    deployment_mode="$(parse_deployment_mode "$@")"
     command -v git >/dev/null 2>&1 || fail "git is required"
     command -v docker >/dev/null 2>&1 || fail "docker is required"
     docker compose version >/dev/null 2>&1 || fail "docker compose is required"
@@ -249,11 +284,29 @@ main() {
     export KNOWLEDGE_REPORT_DIRECTORY="${KNOWLEDGE_REPORT_DIRECTORY:-${ROOT}/reports/knowledge-uat/deploy-placeholder}"
     compose=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
     compose_rows="$("${compose[@]}" ps --all --format '{{.Service}}|{{.State}}|{{.Health}}')"
-    preflight_active_deployment \
-        "${compose_rows}" \
-        "${ROOT}/deployment-record.txt" \
-        "${SOURCES_DIR}/java-system-agent" \
-        "${SOURCES_DIR}/java-code-intelligence"
+    if [[ "${deployment_mode}" == "AGENT_ONLY" ]]; then
+        preflight_agent_only_deployment \
+            "${compose_rows}" \
+            "${ROOT}/deployment-record.txt" \
+            "${SOURCES_DIR}/java-system-agent" \
+            "${SOURCES_DIR}/java-code-intelligence"
+    else
+        preflight_active_deployment \
+            "${compose_rows}" \
+            "${ROOT}/deployment-record.txt" \
+            "${SOURCES_DIR}/java-system-agent" \
+            "${SOURCES_DIR}/java-code-intelligence"
+    fi
+
+    if [[ "${deployment_mode}" == "AGENT_ONLY" ]]; then
+        sync_source "Java System Agent" "${agent_url}" "${agent_ref}" "${SOURCES_DIR}/java-system-agent"
+        "${compose[@]}" build java-system-agent
+        "${compose[@]}" up -d --no-deps --force-recreate --wait \
+            --wait-timeout "${STARTUP_WAIT_SECONDS}" java-system-agent
+        write_deployment_record
+        printf 'deploy: Agent-only UAT update completed; see %s\n' "${ROOT}/deployment-record.txt"
+        return
+    fi
 
     prepare_host_paths
     sync_source "Java System Agent" "${agent_url}" "${agent_ref}" "${SOURCES_DIR}/java-system-agent"

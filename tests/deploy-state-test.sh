@@ -59,6 +59,15 @@ source "${ROOT}/deploy.sh"
 
 HEALTHY_ROWS=$'postgres|running|healthy\nsemantic-service|running|\njava-system-agent|running|healthy'
 
+if preflight_agent_only_deployment \
+    "" \
+    "${TEMPORARY_DIRECTORY}/missing-record.txt" \
+    "${TEMPORARY_DIRECTORY}/missing-agent" \
+    "${TEMPORARY_DIRECTORY}/missing-semantic" >/dev/null 2>&1; then
+    printf 'expected agent-only preflight to reject an absent stack\n' >&2
+    exit 1
+fi
+
 assert_equals "ABSENT" "$(classify_compose_rows "")" "empty Compose rows are absent"
 assert_equals "ACTIVE_HEALTHY" "$(classify_compose_rows "${HEALTHY_ROWS}")" "required running services are healthy"
 assert_equals "ACTIVE_DEGRADED" \
@@ -92,6 +101,8 @@ SEMANTIC_SHA="$(git -C "${SEMANTIC_DIRECTORY}" rev-parse HEAD)"
 printf 'Agent source SHA: %s\nSemantic source SHA: %s\n' "${AGENT_SHA}" "${SEMANTIC_SHA}" > "${RECORD_FILE}"
 
 deployment_record_matches_sources "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}"
+preflight_agent_only_deployment \
+    "${HEALTHY_ROWS}" "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}" >/dev/null
 assert_equals "ACTIVE_HEALTHY" \
     "$(classify_active_deployment_state "${HEALTHY_ROWS}" "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}")" \
     "matching deployment record keeps a healthy stack healthy"

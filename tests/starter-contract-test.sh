@@ -4,12 +4,13 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 bash -n "${ROOT}/deploy.sh"
+bash -n "${ROOT}/tests/deploy-agent-only-test.sh"
 bash -n "${ROOT}/repository.sh"
 bash -n "${ROOT}/contract-uat.sh"
 bash -n "${ROOT}/knowledge-uat.sh"
 bash -n "${ROOT}/payment-uat.sh"
 [[ -x "${ROOT}/payment-uat.sh" ]]
-bash -c 'source "$1"; declare -F classify_compose_rows preflight_active_deployment >/dev/null' bash "${ROOT}/deploy.sh"
+bash -c 'source "$1"; declare -F parse_deployment_mode classify_compose_rows preflight_active_deployment preflight_agent_only_deployment >/dev/null' bash "${ROOT}/deploy.sh"
 bash -c 'source "$1"; declare -F main request >/dev/null' bash "${ROOT}/repository.sh"
 bash -c 'source "$1"; declare -F main deployment_sha repository_revision pin_agent_fixture ensure_discovery_fixture write_summary_junit >/dev/null' bash "${ROOT}/contract-uat.sh"
 bash -c 'source "$1"; declare -F main preflight read_live_configuration select_knowledge_scenario select_knowledge_seed fixture_revision ensure_knowledge_fixture_and_database run_live_scenario validate_junit write_manifest >/dev/null' bash "${ROOT}/knowledge-uat.sh"
@@ -24,6 +25,7 @@ grep -Fq 'gemini-3.1-flash-lite' "${ROOT}/knowledge-uat.sh"
 grep -Fxq 'KNOWLEDGE_SCENARIO=payment exec "${ROOT}/knowledge-uat.sh" "$@"' "${ROOT}/payment-uat.sh"
 [[ "$(grep -Fc 'run --rm --no-deps agent-knowledge' "${ROOT}/knowledge-uat.sh")" -eq 1 ]]
 grep -Fq 'ps --all --format' "${ROOT}/deploy.sh"
+grep -Fq './deploy.sh --agent-only' "${ROOT}/README.md"
 grep -q '^AGENT_GIT_REF=uat$' "${ROOT}/.env.example"
 grep -q '^SEMANTIC_GIT_REF=uat$' "${ROOT}/.env.example"
 grep -Fxq '    m6-semantic-contract:' "${ROOT}/config/semantic-repositories.yml"
