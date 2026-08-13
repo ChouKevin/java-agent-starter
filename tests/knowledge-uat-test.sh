@@ -112,6 +112,11 @@ export -p | grep -Fq 'declare -x KNOWLEDGE_FIXTURE_ID="m7-knowledge-query"'
 assert_equals M7KnowledgeQueryLiveIT "${KNOWLEDGE_TEST_CLASS}" "M7 test class export"
 assert_equals true "${M7_KNOWLEDGE_LIVE}" "M7 live flag is enabled"
 assert_equals false "${PAYMENT_KNOWLEDGE_LIVE}" "payment live flag is disabled for M7"
+unset KNOWLEDGE_SCENARIO
+select_knowledge_scenario payment
+assert_equals payment "${KNOWLEDGE_SCENARIO}" "positional payment scenario selection"
+assert_equals payment-knowledge-query "${FIXTURE_ID}" "positional payment fixture selection"
+assert_equals PaymentKnowledgeLiveIT "${TEST_CLASS}" "positional payment test class selection"
 KNOWLEDGE_SCENARIO=payment
 export KNOWLEDGE_SCENARIO
 select_knowledge_scenario
@@ -326,7 +331,7 @@ read_live_configuration() {
     :
 }
 select_knowledge_scenario() {
-    printf 'select-scenario\n' >> "${INVOCATIONS}"
+    printf 'select-scenario:%s\n' "${1:-}" >> "${INVOCATIONS}"
 }
 create_run_directory() {
     RUN_ID=orchestration-test
@@ -361,8 +366,8 @@ validate_junit() {
 }
 
 : > "${INVOCATIONS}"
-main
-assert_equals $'preflight\nselect-scenario\nreport-directory\nselect-seed\ndeploy\nrevisions\nfixture-db\nmanifest\nlive-run\nvalidate-junit' \
+main payment
+assert_equals $'preflight\nselect-scenario:payment\nreport-directory\nselect-seed\ndeploy\nrevisions\nfixture-db\nmanifest\nlive-run\nvalidate-junit' \
     "$(cat "${INVOCATIONS}")" \
     "preflight precedes every Docker-mutating stage and the live scenario runs once"
 

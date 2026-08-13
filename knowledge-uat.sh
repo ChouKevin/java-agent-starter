@@ -108,7 +108,7 @@ create_run_directory() {
 select_knowledge_scenario() {
     local requested_scenario
 
-    requested_scenario="$(operator_value KNOWLEDGE_SCENARIO)"
+    requested_scenario="${1:-$(operator_value KNOWLEDGE_SCENARIO)}"
     case "${requested_scenario:-m7}" in
         m7)
             KNOWLEDGE_SCENARIO=m7
@@ -313,7 +313,7 @@ write_manifest() {
 
 main() {
     preflight
-    select_knowledge_scenario
+    select_knowledge_scenario "${1:-}"
     read_live_configuration
     create_run_directory
     select_knowledge_seed
