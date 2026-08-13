@@ -81,4 +81,3 @@ if [[ "${ACTUAL_CALLS}" != "${EXPECTED_CALLS}" ]]; then
 fi
 
 grep -Fq 'Agent-only UAT update completed' "${TEMPORARY_DIRECTORY}/output.log"
-
