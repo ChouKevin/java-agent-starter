@@ -38,10 +38,11 @@ run:
 ./deploy.sh --agent-only
 ```
 
-This requires an already healthy, deployment-record-consistent stack. It fast-forwards and rebuilds
-only Java System Agent, recreates only its container, and leaves PostgreSQL and Semantic Service
-running. Use the default `./deploy.sh` for first deployment, Semantic or stack configuration changes,
-or recovery from a degraded or inconsistent stack.
+This requires an already healthy stack whose deployed Semantic source still matches the deployment
+record. The Agent source may be newer than its recorded deployed revision. The command fast-forwards
+and rebuilds only Java System Agent, recreates only its container, and leaves PostgreSQL and Semantic
+Service running. Use the default `./deploy.sh` for first deployment, Semantic or stack configuration
+changes, or recovery from a degraded or inconsistent stack.
 
 ## M6 contract gate
 

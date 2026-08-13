@@ -176,6 +176,23 @@ deployment_record_matches_sources() {
     [[ "${recorded_agent_sha}" == "${agent_sha}" && "${recorded_semantic_sha}" == "${semantic_sha}" ]]
 }
 
+deployment_record_matches_semantic_source() {
+    local record_file="$1"
+    local agent_directory="$2"
+    local semantic_directory="$3"
+    local recorded_agent_sha
+    local recorded_semantic_sha
+    local agent_sha
+    local semantic_sha
+
+    [[ -e "${agent_directory}/.git" && -e "${semantic_directory}/.git" ]] || return 1
+    recorded_agent_sha="$(recorded_source_sha "${record_file}" Agent)" || return 1
+    recorded_semantic_sha="$(recorded_source_sha "${record_file}" Semantic)" || return 1
+    agent_sha="$(git -C "${agent_directory}" rev-parse HEAD 2>/dev/null)" || return 1
+    semantic_sha="$(git -C "${semantic_directory}" rev-parse HEAD 2>/dev/null)" || return 1
+    [[ -n "${recorded_agent_sha}" && -n "${agent_sha}" && "${recorded_semantic_sha}" == "${semantic_sha}" ]]
+}
+
 classify_active_deployment_state() {
     local rows="$1"
     local record_file="$2"
@@ -228,15 +245,26 @@ preflight_agent_only_deployment() {
     local semantic_directory="$4"
     local deployment_state
 
-    deployment_state="$(classify_active_deployment_state \
-        "${rows}" "${record_file}" "${agent_directory}" "${semantic_directory}")"
-    if [[ "${deployment_state}" == "ABSENT" ]]; then
-        printf 'deploy: agent-only deployment requires an active healthy stack; run ./deploy.sh first\n' >&2
-        return 1
-    fi
-
-    preflight_active_deployment \
-        "${rows}" "${record_file}" "${agent_directory}" "${semantic_directory}"
+    deployment_state="$(classify_compose_rows "${rows}")"
+    case "${deployment_state}" in
+        ABSENT)
+            printf 'deploy: agent-only deployment requires an active healthy stack; run ./deploy.sh first\n' >&2
+            return 1
+            ;;
+        ACTIVE_DEGRADED)
+            printf 'deploy: active UAT stack is degraded:\n%s\n' "${rows}" >&2
+            printf 'deploy: inspect logs with: docker compose --project-name java-agent-uat logs postgres semantic-service java-system-agent\n' >&2
+            return 1
+            ;;
+        ACTIVE_HEALTHY)
+            if ! deployment_record_matches_semantic_source \
+                "${record_file}" "${agent_directory}" "${semantic_directory}"; then
+                printf 'deploy: active UAT stack is inconsistent; inspect with: docker compose --project-name java-agent-uat ps --all\n' >&2
+                return 1
+            fi
+            printf 'deploy: active UAT stack is healthy; continuing Agent-only deployment\n'
+            ;;
+    esac
 }
 
 prepare_host_paths() {

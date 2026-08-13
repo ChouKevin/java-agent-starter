@@ -110,6 +110,13 @@ assert_fails_without_sync \
     "${HEALTHY_ROWS}" "${TEMPORARY_DIRECTORY}/missing-record.txt" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}" \
     'docker compose --project-name java-agent-uat ps --all'
 
+git -C "${AGENT_DIRECTORY}" commit --quiet --allow-empty -m agent-update
+assert_equals "ACTIVE_INCONSISTENT" \
+    "$(classify_active_deployment_state "${HEALTHY_ROWS}" "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}")" \
+    "a newer Agent source differs from the active deployment record"
+preflight_agent_only_deployment \
+    "${HEALTHY_ROWS}" "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}" >/dev/null
+
 printf 'Agent source SHA: %s\nSemantic source SHA: %040d\n' "${AGENT_SHA}" 0 > "${RECORD_FILE}"
 if deployment_record_matches_sources "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}"; then
     printf 'expected mismatching deployment record to fail\n' >&2
@@ -118,6 +125,11 @@ fi
 assert_equals "ACTIVE_INCONSISTENT" \
     "$(classify_active_deployment_state "${HEALTHY_ROWS}" "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}")" \
     "mismatching deployment record is inconsistent"
+if preflight_agent_only_deployment \
+    "${HEALTHY_ROWS}" "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}" >/dev/null 2>&1; then
+    printf 'expected agent-only preflight to reject Semantic source drift\n' >&2
+    exit 1
+fi
 assert_fails_without_sync \
     "${HEALTHY_ROWS}" "${RECORD_FILE}" "${AGENT_DIRECTORY}" "${SEMANTIC_DIRECTORY}" \
     'docker compose --project-name java-agent-uat ps --all'
