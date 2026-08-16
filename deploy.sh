@@ -12,21 +12,6 @@ fail() {
     exit 1
 }
 
-parse_deployment_mode() {
-    case "$#" in
-        0)
-            printf 'FULL'
-            ;;
-        1)
-            [[ "$1" == "--agent-only" ]] || fail "usage: ./deploy.sh [--agent-only]"
-            printf 'AGENT_ONLY'
-            ;;
-        *)
-            fail "usage: ./deploy.sh [--agent-only]"
-            ;;
-    esac
-}
-
 env_value() {
     local key="$1"
     local line
@@ -36,17 +21,21 @@ env_value() {
 }
 
 create_env_if_missing() {
-    local token
+    local semantic_token
+    local postgres_password
 
     if [[ -e "${ENV_FILE}" ]]; then
         [[ -s "${ENV_FILE}" ]] || fail "${ENV_FILE} exists but is empty"
         return
     fi
-    token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
-    sed "s/^SEMANTIC_API_TOKEN=$/SEMANTIC_API_TOKEN=${token}/" \
+    semantic_token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    postgres_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    sed \
+        -e "s/^SEMANTIC_API_TOKEN=$/SEMANTIC_API_TOKEN=${semantic_token}/" \
+        -e "s/^SESSION_AGENT_POSTGRES_PASSWORD=$/SESSION_AGENT_POSTGRES_PASSWORD=${postgres_password}/" \
         "${ROOT}/.env.example" > "${ENV_FILE}"
     chmod 0600 "${ENV_FILE}"
-    printf 'deploy: generated %s with a random shared API token\n' "${ENV_FILE}"
+    printf 'deploy: generated %s with local Semantic and PostgreSQL secrets\n' "${ENV_FILE}"
 }
 
 env_or_default() {
@@ -106,8 +95,8 @@ classify_compose_rows() {
     local postgres_health=""
     local semantic_state=""
     local semantic_health=""
-    local agent_state=""
-    local agent_health=""
+    local runtime_state=""
+    local runtime_health=""
 
     if [[ -z "${rows//[[:space:]]/}" ]]; then
         printf 'ABSENT'
@@ -116,7 +105,7 @@ classify_compose_rows() {
 
     while IFS='|' read -r service state health; do
         case "${service}" in
-            postgres)
+            session-agent-postgres)
                 postgres_state="${state}"
                 postgres_health="${health}"
                 ;;
@@ -124,16 +113,16 @@ classify_compose_rows() {
                 semantic_state="${state}"
                 semantic_health="${health}"
                 ;;
-            java-system-agent)
-                agent_state="${state}"
-                agent_health="${health}"
+            session-agent-runtime)
+                runtime_state="${state}"
+                runtime_health="${health}"
                 ;;
         esac
     done <<< "${rows}"
 
     if compose_service_is_healthy "${postgres_state}" "${postgres_health}" \
         && compose_service_is_healthy "${semantic_state}" "${semantic_health}" \
-        && compose_service_is_healthy "${agent_state}" "${agent_health}"; then
+        && compose_service_is_healthy "${runtime_state}" "${runtime_health}"; then
         printf 'ACTIVE_HEALTHY'
     else
         printf 'ACTIVE_DEGRADED'
@@ -147,7 +136,7 @@ recorded_source_sha() {
 
     [[ -f "${record_file}" ]] || return 1
     case "${source}" in
-        Agent|Semantic)
+        'Session Agent'|Semantic)
             ;;
         *)
             return 1
@@ -161,49 +150,32 @@ recorded_source_sha() {
 
 deployment_record_matches_sources() {
     local record_file="$1"
-    local agent_directory="$2"
+    local runtime_directory="$2"
     local semantic_directory="$3"
-    local recorded_agent_sha
+    local recorded_runtime_sha
     local recorded_semantic_sha
-    local agent_sha
+    local runtime_sha
     local semantic_sha
 
-    [[ -e "${agent_directory}/.git" && -e "${semantic_directory}/.git" ]] || return 1
-    recorded_agent_sha="$(recorded_source_sha "${record_file}" Agent)" || return 1
+    [[ -e "${runtime_directory}/.git" && -e "${semantic_directory}/.git" ]] || return 1
+    recorded_runtime_sha="$(recorded_source_sha "${record_file}" 'Session Agent')" || return 1
     recorded_semantic_sha="$(recorded_source_sha "${record_file}" Semantic)" || return 1
-    agent_sha="$(git -C "${agent_directory}" rev-parse HEAD 2>/dev/null)" || return 1
+    runtime_sha="$(git -C "${runtime_directory}" rev-parse HEAD 2>/dev/null)" || return 1
     semantic_sha="$(git -C "${semantic_directory}" rev-parse HEAD 2>/dev/null)" || return 1
-    [[ "${recorded_agent_sha}" == "${agent_sha}" && "${recorded_semantic_sha}" == "${semantic_sha}" ]]
-}
-
-deployment_record_matches_semantic_source() {
-    local record_file="$1"
-    local agent_directory="$2"
-    local semantic_directory="$3"
-    local recorded_agent_sha
-    local recorded_semantic_sha
-    local agent_sha
-    local semantic_sha
-
-    [[ -e "${agent_directory}/.git" && -e "${semantic_directory}/.git" ]] || return 1
-    recorded_agent_sha="$(recorded_source_sha "${record_file}" Agent)" || return 1
-    recorded_semantic_sha="$(recorded_source_sha "${record_file}" Semantic)" || return 1
-    agent_sha="$(git -C "${agent_directory}" rev-parse HEAD 2>/dev/null)" || return 1
-    semantic_sha="$(git -C "${semantic_directory}" rev-parse HEAD 2>/dev/null)" || return 1
-    [[ -n "${recorded_agent_sha}" && -n "${agent_sha}" && "${recorded_semantic_sha}" == "${semantic_sha}" ]]
+    [[ "${recorded_runtime_sha}" == "${runtime_sha}" && "${recorded_semantic_sha}" == "${semantic_sha}" ]]
 }
 
 classify_active_deployment_state() {
     local rows="$1"
     local record_file="$2"
-    local agent_directory="$3"
+    local runtime_directory="$3"
     local semantic_directory="$4"
     local compose_state
 
     compose_state="$(classify_compose_rows "${rows}")"
     if [[ "${compose_state}" == "ACTIVE_HEALTHY" ]] \
         && ! deployment_record_matches_sources \
-            "${record_file}" "${agent_directory}" "${semantic_directory}"; then
+            "${record_file}" "${runtime_directory}" "${semantic_directory}"; then
         printf 'ACTIVE_INCONSISTENT'
     else
         printf '%s' "${compose_state}"
@@ -213,12 +185,12 @@ classify_active_deployment_state() {
 preflight_active_deployment() {
     local rows="$1"
     local record_file="$2"
-    local agent_directory="$3"
+    local runtime_directory="$3"
     local semantic_directory="$4"
     local deployment_state
 
     deployment_state="$(classify_active_deployment_state \
-        "${rows}" "${record_file}" "${agent_directory}" "${semantic_directory}")"
+        "${rows}" "${record_file}" "${runtime_directory}" "${semantic_directory}")"
     case "${deployment_state}" in
         ABSENT)
             printf 'deploy: no active UAT stack found; proceeding with first deployment\n'
@@ -228,41 +200,12 @@ preflight_active_deployment() {
             ;;
         ACTIVE_DEGRADED)
             printf 'deploy: active UAT stack is degraded:\n%s\n' "${rows}" >&2
-            printf 'deploy: inspect logs with: docker compose --project-name java-agent-uat logs postgres semantic-service java-system-agent\n' >&2
+            printf 'deploy: inspect logs with: docker compose --project-name java-agent-uat logs session-agent-postgres semantic-service session-agent-runtime\n' >&2
             return 1
             ;;
         ACTIVE_INCONSISTENT)
             printf 'deploy: active UAT stack is inconsistent; inspect with: docker compose --project-name java-agent-uat ps --all\n' >&2
             return 1
-            ;;
-    esac
-}
-
-preflight_agent_only_deployment() {
-    local rows="$1"
-    local record_file="$2"
-    local agent_directory="$3"
-    local semantic_directory="$4"
-    local deployment_state
-
-    deployment_state="$(classify_compose_rows "${rows}")"
-    case "${deployment_state}" in
-        ABSENT)
-            printf 'deploy: agent-only deployment requires an active healthy stack; run ./deploy.sh first\n' >&2
-            return 1
-            ;;
-        ACTIVE_DEGRADED)
-            printf 'deploy: active UAT stack is degraded:\n%s\n' "${rows}" >&2
-            printf 'deploy: inspect logs with: docker compose --project-name java-agent-uat logs postgres semantic-service java-system-agent\n' >&2
-            return 1
-            ;;
-        ACTIVE_HEALTHY)
-            if ! deployment_record_matches_semantic_source \
-                "${record_file}" "${agent_directory}" "${semantic_directory}"; then
-                printf 'deploy: active UAT stack is inconsistent; inspect with: docker compose --project-name java-agent-uat ps --all\n' >&2
-                return 1
-            fi
-            printf 'deploy: active UAT stack is healthy; continuing Agent-only deployment\n'
             ;;
     esac
 }
@@ -280,72 +223,56 @@ prepare_host_paths() {
 write_deployment_record() {
     {
         printf 'deployment timestamp: %s\n' "$(date --iso-8601=seconds)"
-        printf 'Agent source SHA: %s\n' "$(git -C "${SOURCES_DIR}/java-system-agent" rev-parse HEAD)"
+        printf 'Session Agent source SHA: %s\n' \
+            "$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)"
         printf 'Semantic source SHA: %s\n' "$(git -C "${SOURCES_DIR}/java-code-intelligence" rev-parse HEAD)"
     } > "${ROOT}/deployment-record.txt"
 }
 
 main() {
-    local agent_url
-    local agent_ref
-    local deployment_mode
+    local runtime_url
+    local runtime_ref
     local semantic_url
     local semantic_ref
     local token
+    local google_key
     local compose_rows
     local -a compose
 
-    deployment_mode="$(parse_deployment_mode "$@")"
+    [[ "$#" -eq 0 ]] || fail "usage: ./deploy.sh"
     command -v git >/dev/null 2>&1 || fail "git is required"
     command -v docker >/dev/null 2>&1 || fail "docker is required"
     docker compose version >/dev/null 2>&1 || fail "docker compose is required"
     create_env_if_missing
     token="$(env_value SEMANTIC_API_TOKEN)"
+    google_key="$(env_value GOOGLE_API_KEY)"
     [[ -n "${token}" ]] || fail "SEMANTIC_API_TOKEN is blank in ${ENV_FILE}"
+    [[ -n "${google_key}" ]] || fail "GOOGLE_API_KEY is blank in ${ENV_FILE}"
 
-    agent_url="$(env_or_default AGENT_GIT_URL git@github.com:ChouKevin/java-system-agent.git)"
-    agent_ref="$(env_or_default AGENT_GIT_REF uat)"
+    runtime_url="$(env_or_default SESSION_AGENT_GIT_URL git@github.com:ChouKevin/session-agent-runtime.git)"
+    runtime_ref="$(env_or_default SESSION_AGENT_GIT_REF main)"
     semantic_url="$(env_or_default SEMANTIC_GIT_URL git@github.com:ChouKevin/java-code-intelligence.git)"
     semantic_ref="$(env_or_default SEMANTIC_GIT_REF uat)"
 
     export STARTER_ROOT="${ROOT}"
-    export KNOWLEDGE_REPORT_DIRECTORY="${KNOWLEDGE_REPORT_DIRECTORY:-${ROOT}/reports/knowledge-uat/deploy-placeholder}"
     compose=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
     compose_rows="$("${compose[@]}" ps --all --format '{{.Service}}|{{.State}}|{{.Health}}')"
-    if [[ "${deployment_mode}" == "AGENT_ONLY" ]]; then
-        preflight_agent_only_deployment \
-            "${compose_rows}" \
-            "${ROOT}/deployment-record.txt" \
-            "${SOURCES_DIR}/java-system-agent" \
-            "${SOURCES_DIR}/java-code-intelligence"
-    else
-        preflight_active_deployment \
-            "${compose_rows}" \
-            "${ROOT}/deployment-record.txt" \
-            "${SOURCES_DIR}/java-system-agent" \
-            "${SOURCES_DIR}/java-code-intelligence"
-    fi
-
-    if [[ "${deployment_mode}" == "AGENT_ONLY" ]]; then
-        sync_source "Java System Agent" "${agent_url}" "${agent_ref}" "${SOURCES_DIR}/java-system-agent"
-        "${compose[@]}" build java-system-agent
-        "${compose[@]}" up -d --no-deps --force-recreate --wait \
-            --wait-timeout "${STARTUP_WAIT_SECONDS}" java-system-agent
-        write_deployment_record
-        printf 'deploy: Agent-only UAT update completed; see %s\n' "${ROOT}/deployment-record.txt"
-        return
-    fi
+    preflight_active_deployment \
+        "${compose_rows}" \
+        "${ROOT}/deployment-record.txt" \
+        "${SOURCES_DIR}/session-agent-runtime" \
+        "${SOURCES_DIR}/java-code-intelligence"
 
     prepare_host_paths
-    sync_source "Java System Agent" "${agent_url}" "${agent_ref}" "${SOURCES_DIR}/java-system-agent"
+    sync_source "Session Agent Runtime" "${runtime_url}" "${runtime_ref}" "${SOURCES_DIR}/session-agent-runtime"
     sync_source "Java Code Intelligence" "${semantic_url}" "${semantic_ref}" "${SOURCES_DIR}/java-code-intelligence"
 
-    "${compose[@]}" build java-system-agent semantic-service
-    "${compose[@]}" --profile setup run --rm permissions-init
-    "${compose[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}"
+    "${compose[@]}" build session-agent-runtime semantic-service
+    "${compose[@]}" --profile setup run --rm fixture-init
+    "${compose[@]}" up -d --remove-orphans --wait --wait-timeout "${STARTUP_WAIT_SECONDS}"
     "${compose[@]}" --profile tools run --rm network-probe
     write_deployment_record
-    printf 'deploy: UAT stack started; see %s\n' "${ROOT}/deployment-record.txt"
+    printf 'deploy: Session Agent UAT stack started; see %s\n' "${ROOT}/deployment-record.txt"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
