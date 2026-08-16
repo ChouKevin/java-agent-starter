@@ -59,7 +59,7 @@ if rg -n 'prompt' "${ROOT}/compose.yaml" >/dev/null; then
     exit 1
 fi
 
-if rg -n --glob '!starter-contract-test.sh' \
+if rg -n --glob '!starter-contract-test.sh' --glob '!deploy-state-test.sh' \
     'java-system-agent|(^|[^A-Z_])AGENT_GIT_|(^|[^A-Z_])AGENT_REPOSITORY_ID|agent-only|agent-contract|agent-knowledge' \
     "${ROOT}/README.md" "${ROOT}/.env.example" "${ROOT}/compose.yaml" \
     "${ROOT}/deploy.sh" "${ROOT}/runtime-uat.sh" "${ROOT}/tests" >/dev/null; then
@@ -69,6 +69,7 @@ fi
 
 cat > "${CONTRACT_ENV}" <<EOF
 STARTER_ROOT=${ROOT}
+FIXTURE_VOLUME_SUFFIX=dummy-fixture-suffix
 SEMANTIC_API_TOKEN=contract-semantic-token
 SESSION_AGENT_POSTGRES_PASSWORD=contract-postgres-password
 GOOGLE_API_KEY=contract-google-key
@@ -116,6 +117,11 @@ jq -e '
   and .services["fixture-init"].profiles == ["setup"]
   and .services["network-probe"].profiles == ["tools"]
   and (.services["fixture-init"].command | join(" ") | contains("chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service"))
+  and (.services["fixture-init"].command | join(" ") | contains("cp -a /fixture-source/payment-service/. /fixtures/payment-service/"))
+  and (.services["fixture-init"].command | join(" ") | contains(".fixture-ready"))
+  and (.services["fixture-init"].command | join(" ") | contains("find /fixtures") | not)
+  and .volumes["payment-service-fixture"].name == "java-agent-uat-payment-fixture-dummy-fixture-suffix"
+  and .volumes["order-service-fixture"].name == "java-agent-uat-order-fixture-dummy-fixture-suffix"
   and (.services["network-probe"].command | join(" ") | contains("X-Api-Token: $$SEMANTIC_API_TOKEN"))
   and (.services["network-probe"].command | join(" ") | contains("http://session-agent-runtime:8080/actuator/health"))
   and (.services["network-probe"].command | join(" ") | contains("set -x") | not)

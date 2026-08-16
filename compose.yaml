@@ -72,14 +72,18 @@ services:
     image: alpine:3.22
     profiles: [setup]
     user: "0:0"
+    environment:
+      FIXTURE_VOLUME_SUFFIX: ${FIXTURE_VOLUME_SUFFIX:?FIXTURE_VOLUME_SUFFIX is required}
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        find /fixtures/payment-service -mindepth 1 -delete &&
-        find /fixtures/order-service -mindepth 1 -delete &&
+        test ! -e /fixtures/payment-service/.fixture-ready &&
+        test ! -e /fixtures/order-service/.fixture-ready &&
         cp -a /fixture-source/payment-service/. /fixtures/payment-service/ &&
         cp -a /fixture-source/order-service/. /fixtures/order-service/ &&
-        chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service
+        chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service &&
+        printf '%s\n' "$$FIXTURE_VOLUME_SUFFIX" > /fixtures/payment-service/.fixture-ready &&
+        printf '%s\n' "$$FIXTURE_VOLUME_SUFFIX" > /fixtures/order-service/.fixture-ready
     volumes:
       - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/payment-service:/fixture-source/payment-service:ro
       - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/order-service:/fixture-source/order-service:ro
@@ -115,7 +119,9 @@ services:
 volumes:
   session-agent-postgres-data:
   payment-service-fixture:
+    name: java-agent-uat-payment-fixture-${FIXTURE_VOLUME_SUFFIX:?FIXTURE_VOLUME_SUFFIX is required}
   order-service-fixture:
+    name: java-agent-uat-order-fixture-${FIXTURE_VOLUME_SUFFIX:?FIXTURE_VOLUME_SUFFIX is required}
   semantic-repository-data:
   semantic-jdt-data:
 

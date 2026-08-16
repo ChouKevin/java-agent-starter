@@ -23,7 +23,8 @@ env_value() {
 env_or_default() { printf '%s' "$2"; }
 preflight_active_deployment() { printf 'preflight\n' >> "${call_log}"; }
 prepare_host_paths() { printf 'prepare\n' >> "${call_log}"; }
-sync_source() { printf 'sync:%s\n' "$1" >> "${call_log}"; }
+prepare_or_resume_sources() { printf 'sources:%s:%s\n' "$1" "$3" >> "${call_log}"; export FIXTURE_VOLUME_SUFFIX=prepared-fixture; }
+prepare_target_fixture_volumes() { printf 'fixtures\n' >> "${call_log}"; }
 write_deployment_record() { printf 'record\n' >> "${call_log}"; }
 
 docker() {
@@ -50,7 +51,7 @@ docker() {
 
 main > "${temporary_directory}/output.log"
 
-expected=$'preflight\nprepare\nsync:Session Agent Runtime\nsync:Java Code Intelligence\ncompose:build session-agent-runtime semantic-service\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --remove-orphans --wait --wait-timeout 240\ncompose:--profile tools run --rm network-probe\nrecord'
+expected=$'preflight\nprepare\nsources:git@github.com:ChouKevin/session-agent-runtime.git:git@github.com:ChouKevin/java-code-intelligence.git\ncompose:build session-agent-runtime semantic-service\nfixtures\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240\ncompose:--profile tools run --rm network-probe\nrecord'
 actual="$(<"${call_log}")"
 [[ "${actual}" == "${expected}" ]] || {
     printf 'unexpected deployment calls\nexpected:\n%s\nactual:\n%s\n' \
