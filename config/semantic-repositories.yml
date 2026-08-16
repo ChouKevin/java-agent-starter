@@ -1,19 +1,10 @@
 semantic:
   repositories:
-    java-system-agent:
-      mode: REMOTE
-      display-name: Java System Agent
-      url: https://github.com/ChouKevin/java-system-agent.git
-      default-branch: uat
-    m6-semantic-contract:
+    payment-service:
       mode: LOCAL_FIXTURE
-      display-name: M6 Semantic Contract Fixture
-      path: /fixtures/m6-semantic-contract
-    m7-knowledge-query:
+      display-name: Payment Service
+      path: /fixtures/payment-service
+    order-service:
       mode: LOCAL_FIXTURE
-      display-name: M7 Knowledge Query Fixture
-      path: /fixtures/m7-knowledge-query
-    payment-knowledge-query:
-      mode: LOCAL_FIXTURE
-      display-name: Payment Knowledge Query Fixture
-      path: /fixtures/payment-knowledge-query
+      display-name: Order Service
+      path: /fixtures/order-service

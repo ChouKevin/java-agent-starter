@@ -5,160 +5,88 @@ x-runtime-logging: &runtime-logging
       max-size: "100m"
       max-file: "5"
 
-x-contract-runner: &contract-runner
-  image: maven:3.9.11-eclipse-temurin-21
-  profiles: [contract]
-  depends_on:
-    semantic-service:
-      condition: service_started
-  environment:
-    M6_SEMANTIC_BASE_URL: http://semantic-service:8080
-    M6_SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
-    M6_AGENT_REPO_ID: ${M6_AGENT_REPO_ID:-java-system-agent}
-    M6_AGENT_EXPECTED_REVISION: ${M6_AGENT_EXPECTED_REVISION:-}
-    M6_DISCOVERY_REPO_ID: ${M6_DISCOVERY_REPO_ID:-m6-semantic-contract}
-    M6_DISCOVERY_EXPECTED_REVISION: ${M6_DISCOVERY_EXPECTED_REVISION:-FIXTURE}
-    HOST_UID: ${HOST_UID:-1000}
-    HOST_GID: ${HOST_GID:-1000}
-  restart: "no"
-  networks: [agent-network]
-
 services:
-  postgres:
+  session-agent-postgres:
     <<: *runtime-logging
-    image: postgres:17-alpine
+    image: postgres:17
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-agent}
-      POSTGRES_DB: ${POSTGRES_DB:-java_system_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
+      POSTGRES_DB: session_agent
+      POSTGRES_USER: session_agent
+      POSTGRES_PASSWORD: ${SESSION_AGENT_POSTGRES_PASSWORD:?required}
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - session-agent-postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-    restart: unless-stopped
-    networks: [agent-network]
+      test: ["CMD-SHELL", "pg_isready -U session_agent -d session_agent"]
+    networks: [session-agent-network]
 
   semantic-service:
     <<: *runtime-logging
-    image: java-code-intelligence:uat
     build:
       context: ${STARTER_ROOT}/.runtime/sources/java-code-intelligence
-    ports:
-      - "${SEMANTIC_HOST_PORT:-8080}:8080"
     environment:
-      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
+      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN:?required}
       GIT_USERNAME: ${GIT_USERNAME:-}
       GIT_TOKEN: ${GIT_TOKEN:-}
       JDTLS_MAX_ACTIVE_WORKSPACES: ${JDTLS_MAX_ACTIVE_WORKSPACES:-2}
       REPOSITORY_SYNTAX_CACHE_MAXIMUM_WEIGHT: ${REPOSITORY_SYNTAX_CACHE_MAXIMUM_WEIGHT:-120000}
       REPOSITORY_SYNTAX_CACHE_MAXIMUM_ENTRY_WEIGHT: ${REPOSITORY_SYNTAX_CACHE_MAXIMUM_ENTRY_WEIGHT:-60000}
       SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/semantic-repositories.yml
+    ports:
+      - "127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"
     volumes:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
-      - semantic-fixture:/fixtures/m6-semantic-contract
-      - knowledge-fixture:/fixtures/m7-knowledge-query
-      - payment-knowledge-fixture:/fixtures/payment-knowledge-query
-      - ${STARTER_ROOT}/data/repositories:/data/repos
-      - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
-    restart: unless-stopped
-    networks: [agent-network]
+      - payment-service-fixture:/fixtures/payment-service:ro
+      - order-service-fixture:/fixtures/order-service:ro
+      - semantic-repository-data:/data/repos
+      - semantic-jdt-data:/data/jdtls
+    networks: [session-agent-network]
 
-  java-system-agent:
+  session-agent-runtime:
     <<: *runtime-logging
-    image: java-system-agent:uat
     build:
-      context: ${STARTER_ROOT}/.runtime/sources/java-system-agent
+      context: ${STARTER_ROOT}/.runtime/sources/session-agent-runtime
     depends_on:
-      postgres:
+      session-agent-postgres:
         condition: service_healthy
       semantic-service:
         condition: service_started
     environment:
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-agent-runtime}
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-java_system_agent}
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
-      CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080
-      CODEBASE_SERVICE_API_TOKEN: ${SEMANTIC_API_TOKEN}
-      AGENT_REPOSITORY_ID: ${AGENT_REPOSITORY_ID:-java-system-agent}
+      SESSION_AGENT_DATASOURCE_URL: jdbc:postgresql://session-agent-postgres:5432/session_agent
+      SESSION_AGENT_DATASOURCE_USERNAME: session_agent
+      SESSION_AGENT_DATASOURCE_PASSWORD: ${SESSION_AGENT_POSTGRES_PASSWORD:?required}
+      SEMANTIC_BASE_URL: http://semantic-service:8080
+      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN:?required}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?required}
+      SPRING_AI_GOOGLE_GENAI_API_KEY: ${GOOGLE_API_KEY:?required}
+      GOOGLE_GENAI_MODEL: ${GOOGLE_GENAI_MODEL:-gemini-3.1-flash-lite}
       SLACK_APP_TOKEN: ${SLACK_APP_TOKEN:-}
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_BOT_USER_ID: ${SLACK_BOT_USER_ID:-}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-poc-not-used}
-      GOOGLE_GENAI_MODEL: ${GOOGLE_GENAI_MODEL:-gemini-3.1-flash-lite}
-    restart: unless-stopped
-    stop_grace_period: 45s
-    networks: [agent-network]
+      SERVER_ADDRESS: 0.0.0.0
+    ports:
+      - "127.0.0.1:${SESSION_AGENT_HOST_PORT:-8090}:8080"
+    networks: [session-agent-network]
 
-  permissions-init:
+  fixture-init:
     <<: *runtime-logging
-    image: java-code-intelligence:uat
+    image: alpine:3.22
     profiles: [setup]
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        find /fixtures/m6-semantic-contract -mindepth 1 -delete &&
-        cp -a /fixture-source/m6-semantic-contract/. /fixtures/m6-semantic-contract/ &&
-        chown -R 10001:10001 /data/repos /data/jdtls &&
-        chown -R 10001:10001 /fixtures/m6-semantic-contract &&
-        find /data/repos /data/jdtls -type d -exec chmod 0750 {} +
+        find /fixtures/payment-service -mindepth 1 -delete &&
+        find /fixtures/order-service -mindepth 1 -delete &&
+        cp -a /fixture-source/payment-service/. /fixtures/payment-service/ &&
+        cp -a /fixture-source/order-service/. /fixtures/order-service/ &&
+        chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service
     volumes:
-      - ${STARTER_ROOT}/data/repositories:/data/repos
-      - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
-      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m6-semantic-contract:/fixture-source/m6-semantic-contract:ro
-      - semantic-fixture:/fixtures/m6-semantic-contract
+      - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/payment-service:/fixture-source/payment-service:ro
+      - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/order-service:/fixture-source/order-service:ro
+      - payment-service-fixture:/fixtures/payment-service
+      - order-service-fixture:/fixtures/order-service
     restart: "no"
-    networks: [agent-network]
-
-  knowledge-fixture-init:
-    <<: *runtime-logging
-    image: java-code-intelligence:uat
-    profiles: [knowledge]
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - >-
-        mkdir -p /data/jdtls/m7-knowledge-query /data/jdtls/payment-knowledge-query &&
-        find /fixtures/m7-knowledge-query -mindepth 1 -delete &&
-        find /fixtures/payment-knowledge-query -mindepth 1 -delete &&
-        find /data/jdtls/m7-knowledge-query -mindepth 1 -delete &&
-        find /data/jdtls/payment-knowledge-query -mindepth 1 -delete &&
-        cp -a /fixture-source/m7-knowledge-query/. /fixtures/m7-knowledge-query/ &&
-        cp -a /fixture-source/payment-knowledge-query/. /fixtures/payment-knowledge-query/ &&
-        chown -R 10001:10001 /fixtures/m7-knowledge-query /fixtures/payment-knowledge-query /data/jdtls/m7-knowledge-query /data/jdtls/payment-knowledge-query
-    volumes:
-      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/m7-knowledge-query:/fixture-source/m7-knowledge-query:ro
-      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src/test/resources/fixtures/payment-knowledge-query:/fixture-source/payment-knowledge-query:ro
-      - knowledge-fixture:/fixtures/m7-knowledge-query
-      - payment-knowledge-fixture:/fixtures/payment-knowledge-query
-      - ${STARTER_ROOT}/data/jdtls-workspaces:/data/jdtls
-    restart: "no"
-    networks: [agent-network]
-
-  knowledge-db-init:
-    <<: *runtime-logging
-    image: postgres:17-alpine
-    profiles: [knowledge]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-agent}
-      POSTGRES_DB: ${POSTGRES_DB:-java_system_agent}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - >-
-        export PGPASSWORD="$$POSTGRES_PASSWORD"; export PGHOST=postgres; export PGDATABASE=postgres;
-        dropdb -U "$$POSTGRES_USER" --if-exists --force agent_knowledge_live;
-        createdb -U "$$POSTGRES_USER" agent_knowledge_live
-    restart: "no"
-    networks: [agent-network]
+    networks: [session-agent-network]
 
   network-probe:
     <<: *runtime-logging
@@ -167,131 +95,30 @@ services:
     depends_on:
       semantic-service:
         condition: service_started
+      session-agent-runtime:
+        condition: service_started
     environment:
-      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN}
+      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN:?required}
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-max-time 120
+        curl --fail --silent --show-error --retry 30 --retry-delay 2
         --retry-connrefused --connect-timeout 5 --max-time 10
-        -H "X-Api-Token: $$SEMANTIC_API_TOKEN" http://semantic-service:8080/v1/repositories
+        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
+        http://semantic-service:8080/v1/repositories >/dev/null &&
+        curl --fail --silent --show-error --retry 30 --retry-delay 2
+        --retry-connrefused --connect-timeout 5 --max-time 10
+        http://session-agent-runtime:8080/actuator/health >/dev/null
     restart: "no"
-    networks: [agent-network]
-
-  semantic-contract:
-    <<: *contract-runner
-    working_dir: /workspace
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        mvn --batch-mode --no-transfer-progress clean test -Dtest=McpLiveContractIT;
-        status=$$?;
-        mkdir -p /reports/semantic &&
-        cp /workspace/target/surefire-reports/TEST-com.java.semantic.mcp.McpLiveContractIT.xml /reports/semantic/ &&
-        chown -R "$$HOST_UID:$$HOST_GID" /reports;
-        report_status=$$?;
-        if [ "$$status" -ne 0 ]; then exit "$$status"; fi;
-        exit "$$report_status"
-    volumes:
-      - semantic-contract-workspace:/workspace
-      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/pom.xml:/workspace/pom.xml:ro
-      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/src:/workspace/src:ro
-      - maven-cache:/root/.m2
-      - ${STARTER_ROOT}/reports/contract-uat/${M6_RUN_ID}:/reports
-
-  agent-contract:
-    <<: *contract-runner
-    working_dir: /workspace
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        mvn --batch-mode --no-transfer-progress clean test -Dtest=JavaSemanticServiceLiveContractIT;
-        status=$$?;
-        mkdir -p /reports/agent &&
-        cp /workspace/target/surefire-reports/TEST-com.java.system.agent.codeintelligence.semantic.JavaSemanticServiceLiveContractIT.xml /reports/agent/ &&
-        chown -R "$$HOST_UID:$$HOST_GID" /reports;
-        report_status=$$?;
-        if [ "$$status" -ne 0 ]; then exit "$$status"; fi;
-        exit "$$report_status"
-    volumes:
-      - agent-contract-workspace:/workspace
-      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro
-      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro
-      - maven-cache:/root/.m2
-      - ${STARTER_ROOT}/reports/contract-uat/${M6_RUN_ID}:/reports
-
-  agent-knowledge:
-    <<: *runtime-logging
-    image: maven:3.9.11-eclipse-temurin-21
-    profiles: [knowledge]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      semantic-service:
-        condition: service_started
-      knowledge-fixture-init:
-        condition: service_completed_successfully
-      knowledge-db-init:
-        condition: service_completed_successfully
-    environment:
-      M7_KNOWLEDGE_LIVE: ${M7_KNOWLEDGE_LIVE}
-      PAYMENT_KNOWLEDGE_LIVE: ${PAYMENT_KNOWLEDGE_LIVE}
-      M7_KNOWLEDGE_SEED: ${M7_KNOWLEDGE_SEED}
-      M7_AGENT_SOURCE_SHA: ${M7_AGENT_SOURCE_SHA}
-      M7_SEMANTIC_SOURCE_SHA: ${M7_SEMANTIC_SOURCE_SHA}
-      KNOWLEDGE_SCENARIO: ${KNOWLEDGE_SCENARIO}
-      KNOWLEDGE_FIXTURE_ID: ${KNOWLEDGE_FIXTURE_ID}
-      AGENT_REPOSITORY_ID: ${KNOWLEDGE_FIXTURE_ID}
-      KNOWLEDGE_TEST_CLASS: ${KNOWLEDGE_TEST_CLASS}
-      KNOWLEDGE_RUN_ID: ${KNOWLEDGE_RUN_ID}
-      KNOWLEDGE_REPORT_DIRECTORY: /reports
-      KNOWLEDGE_AGENT_SOURCE_SHA: ${KNOWLEDGE_AGENT_SOURCE_SHA}
-      KNOWLEDGE_SEMANTIC_SOURCE_SHA: ${KNOWLEDGE_SEMANTIC_SOURCE_SHA}
-      KNOWLEDGE_STARTER_SOURCE_SHA: ${KNOWLEDGE_STARTER_SOURCE_SHA}
-      M7_REPORT_DIRECTORY: /reports
-      CODEBASE_SERVICE_BASE_URL: http://semantic-service:8080
-      CODEBASE_SERVICE_API_TOKEN: ${SEMANTIC_API_TOKEN}
-      SPRING_PROFILES_ACTIVE: agent-runtime
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/agent_knowledge_live
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-agent}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-poc-postgres-password}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY}
-      GOOGLE_GENAI_MODEL: ${GOOGLE_GENAI_MODEL:-gemini-3.1-flash-lite}
-      HOST_UID: ${HOST_UID:-1000}
-      HOST_GID: ${HOST_GID:-1000}
-    working_dir: /workspace
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - >-
-        mvn --batch-mode --no-transfer-progress clean test -Dtest=$${KNOWLEDGE_TEST_CLASS};
-        maven_status=$$?;
-        mkdir -p /reports;
-        cp /workspace/target/surefire-reports/TEST-com.java.system.agent.$${KNOWLEDGE_TEST_CLASS}.xml /reports/;
-        copy_status=$$?;
-        chown -R "$$HOST_UID:$$HOST_GID" /reports;
-        ownership_status=$$?;
-        if [ "$$maven_status" -ne 0 ]; then exit "$$maven_status"; fi;
-        if [ "$$copy_status" -ne 0 ]; then exit "$$copy_status"; fi;
-        exit "$$ownership_status"
-    volumes:
-      - agent-knowledge-workspace:/workspace
-      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/pom.xml:/workspace/pom.xml:ro
-      - ${STARTER_ROOT}/.runtime/sources/java-system-agent/src:/workspace/src:ro
-      - maven-cache:/root/.m2
-      - ${KNOWLEDGE_REPORT_DIRECTORY}:/reports
-    restart: "no"
-    networks: [agent-network]
+    networks: [session-agent-network]
 
 volumes:
-  postgres-data:
-  semantic-contract-workspace:
-  agent-contract-workspace:
-  semantic-fixture:
-  knowledge-fixture:
-  payment-knowledge-fixture:
-  agent-knowledge-workspace:
-  maven-cache:
+  session-agent-postgres-data:
+  payment-service-fixture:
+  order-service-fixture:
+  semantic-repository-data:
+  semantic-jdt-data:
 
 networks:
-  agent-network:
+  session-agent-network:
     driver: bridge
