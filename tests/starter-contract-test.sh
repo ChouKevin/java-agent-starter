@@ -14,6 +14,16 @@ bash -n "${ROOT}/deploy.sh"
 bash -n "${ROOT}/repository.sh"
 bash -n "${ROOT}/tests/deploy-session-runtime-test.sh"
 bash -n "${ROOT}/tests/deploy-state-test.sh"
+bash -n "${ROOT}/runtime-uat.sh"
+bash -n "${ROOT}/tests/runtime-uat-test.sh"
+
+for removed_file in contract-uat.sh knowledge-uat.sh payment-uat.sh \
+    tests/contract-uat-test.sh tests/deploy-agent-only-test.sh tests/knowledge-uat-test.sh; do
+    [[ ! -e "${ROOT}/${removed_file}" ]] || {
+        printf 'legacy agent workflow remains: %s\n' "${removed_file}" >&2
+        exit 1
+    }
+done
 
 for expected_line in \
     'SESSION_AGENT_GIT_URL=git@github.com:ChouKevin/session-agent-runtime.git' \
@@ -46,6 +56,14 @@ fi
 
 if rg -n 'prompt' "${ROOT}/compose.yaml" >/dev/null; then
     printf 'agent-owned prompt mount remains\n' >&2
+    exit 1
+fi
+
+if rg -n --glob '!starter-contract-test.sh' \
+    'java-system-agent|(^|[^A-Z_])AGENT_GIT_|(^|[^A-Z_])AGENT_REPOSITORY_ID|agent-only|agent-contract|agent-knowledge' \
+    "${ROOT}/README.md" "${ROOT}/.env.example" "${ROOT}/compose.yaml" \
+    "${ROOT}/deploy.sh" "${ROOT}/runtime-uat.sh" "${ROOT}/tests" >/dev/null; then
+    printf 'legacy Java System Agent deployment contract remains\n' >&2
     exit 1
 fi
 

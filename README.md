@@ -1,78 +1,78 @@
 # Java Agent Starter
 
-Single-host UAT/POC deployment for Java System Agent, Java Code Intelligence, and PostgreSQL.
-Clone this repository and run one script; the Starter clones both service repositories at their
-`uat` branches, builds the images, starts the stack, and verifies the private container connection.
+Single-host UAT deployment for the externally published Session Agent Runtime,
+Semantic Service, and the Runtime's dedicated PostgreSQL database. The Starter
+contains no Runtime source: it owns source checkout, Compose lifecycle, probes,
+and the deployment record only.
 
-Cross-service delivery order and acceptance ownership are defined in
+Cross-service ownership and acceptance milestones are in
 [`docs/roadmap.md`](docs/roadmap.md).
-
-Only Java Code Intelligence publishes a host port (`8080` by default). PostgreSQL and Java System
-Agent remain on the private Docker network. This is plain HTTP for a trusted firewall/VPN only; do
-not expose it to an untrusted network without a separate TLS and security design.
 
 ## Start
 
-Requirements: Git, Docker Engine with Compose v2, and SSH access to the two GitHub repositories.
-No manual environment value is required for the default `agent-runtime` smoke deployment.
-The Agent uses `AGENT_REPOSITORY_ID=java-system-agent` by default; change it in `.env` only when
-the runtime should query another configured repository.
+Requirements: Git, Docker Engine with Compose v2, SSH access to the Runtime and
+Semantic repositories, and a Google API key. On an initial deployment, let
+`deploy.sh` create `.env` with local Semantic and PostgreSQL secrets. It stops
+until `GOOGLE_API_KEY` is set; add that key to `.env` and rerun it.
 
 ```bash
 git clone git@github.com:ChouKevin/java-agent-starter.git
 cd java-agent-starter
 ./deploy.sh
+# Set GOOGLE_API_KEY in the generated .env, then rerun.
+./deploy.sh
 ```
 
-On first run, `deploy.sh` creates `.env` with a random shared Semantic API token. It clones sources
-under `.runtime/sources/`, builds both images, creates runtime directories, starts the services,
-runs an authenticated Semantic API probe, and writes exact source SHAs to
-`deployment-record.txt`. Later runs accept only clean checkouts on the configured branch and update
-them by fast-forward; they never reset, rebase, overwrite, or discard local work.
+`deploy.sh` clones the configured Runtime and Semantic sources under
+`.runtime/sources/`, builds their images, initializes Runtime fixtures, starts
+the stack, probes both services, and records exact source SHAs in
+`deployment-record.txt`. Later runs accept only clean checkouts on the configured
+branch and update them by fast-forward; they never reset, rebase, overwrite, or
+discard local work.
 
-### Agent-only prompt update
+The Runtime is published only on loopback port `8090` by default; Semantic is on
+loopback port `8080`. This is plain HTTP for a trusted firewall/VPN only; do not
+expose it to an untrusted network without a separate TLS and security design.
 
-Prompt files under Java System Agent `src/main/resources/prompts/` are packaged in the Agent JAR
-and loaded when the Agent starts. After merging a prompt-only Agent change to the configured branch,
-run:
+## Live acceptance
 
 ```bash
-./deploy.sh --agent-only
+./runtime-uat.sh
 ```
 
-This requires an already healthy stack whose deployed Semantic source still matches the deployment
-record. The Agent source may be newer than its recorded deployed revision. The command fast-forwards
-and rebuilds only Java System Agent, recreates only its container, and leaves PostgreSQL and Semantic
-Service running. Use the default `./deploy.sh` for first deployment, Semantic or stack configuration
-changes, or recovery from a degraded or inconsistent stack.
+`runtime-uat.sh` deploys first, then invokes only `SessionAgentLiveIT` from the
+checked-out Runtime `pom.xml`. It derives loopback Runtime and Semantic URLs from
+`SESSION_AGENT_HOST_PORT` and `SEMANTIC_HOST_PORT`, forwards the configured model,
+and does not print secret values.
 
-## M6 contract gate
+The Runtime owns the conversation and tool loop, citations, persistence, live
+acceptance, and its dedicated database. It uses Semantic for repository/source
+analysis and Google for model access. Slack values in `.env` are reserved
+deployment inputs only; no Slack integration is implemented here.
 
-Run `./contract-uat.sh` to deploy the selected service revisions and execute the revision-pinned
-Semantic MCP and Agent HTTP contracts. The gate checks the selected Agent repository revision plus
-the `m6-semantic-contract` local fixture and writes its manifest and JUnit reports under
-`reports/contract-uat/<run-id>/`.
+## One-time legacy stack cutover
 
-Set `SPRING_PROFILES_ACTIVE=slack-agent` and the Slack/model values in `.env` only when exercising
-the complete Slack Agent. Slack Socket Mode is outbound, so Java System Agent still needs no
-published inbound port.
+`deploy.sh` has no legacy compatibility mode. Before replacing an existing legacy
+deployment, an operator must validate the current deployment record, healthy
+services, and clean managed source checkouts. Then clone, fast-forward, render
+Compose, and build replacement Runtime and Semantic images while the validated
+stack remains running. Recheck that service rows and the deployment record have
+not changed, then run:
 
-## Knowledge acceptance
+```bash
+docker compose --project-name java-agent-uat --env-file .env -f compose.yaml down --remove-orphans
+./deploy.sh
+./runtime-uat.sh
+```
 
-Run the default M7 scenario with `./knowledge-uat.sh`, or the payment scenario with
-`./payment-uat.sh`. Each run reuses only a healthy active deployment and records the exact Starter,
-Agent, and Semantic source SHAs from that deployment in `reports/knowledge-uat/<run-id>/`.
-
-Knowledge acceptance resets the dedicated `agent_knowledge_live` database and isolated M7/payment
-fixture volumes and JDT workspaces before running its selected test. The report directory receives
-the selected JUnit XML and a manifest with the scenario, fixture revision, model, seed, and source
-SHAs.
+Do not pass `--volumes`: shutdown removes old containers and the project network,
+but retains the old database volume for deliberate later disposal.
 
 ## Add a repository for analysis
 
 1. Add an entry under `semantic.repositories` in
    `config/semantic-repositories.yml`. Keep credentials out of this file.
-2. Run `./deploy.sh` so Semantic Service restarts with the updated catalog.
+2. Run `./deploy.sh` so Semantic restarts with the updated catalog.
 3. Explicitly clone the catalog entry and read its current revision:
 
 ```bash
@@ -81,34 +81,21 @@ SHAs.
 ./repository.sh revision my-service
 ```
 
-`ensure` requires Semantic Service to be running. Catalog membership alone never clones a source
-repository. The returned `currentRevision` is the revision every subsequent semantic query must
-carry. For private catalog repositories, set `GIT_USERNAME` and `GIT_TOKEN` in `.env`.
-
-Example catalog entry:
-
-```yaml
-semantic:
-  repositories:
-    my-service:
-      mode: REMOTE
-      display-name: My Service
-      url: https://github.com/example/my-service.git
-      default-branch: main
-```
+Catalog membership alone never clones a source repository. The returned
+`currentRevision` is the revision every later Semantic query must carry. For
+private catalog repositories, set `GIT_USERNAME` and `GIT_TOKEN` in `.env`.
 
 ## Operations
 
 ```bash
 export STARTER_ROOT="$PWD"
 alias uat='docker compose --project-name java-agent-uat --env-file .env -f compose.yaml'
-
 uat ps
+uat logs -f session-agent-runtime
 uat logs -f semantic-service
-uat logs -f java-system-agent
 ```
 
-Docker Compose logs use bounded `json-file` rotation; service restarts no longer depend on host log
-ownership. Runtime clones, data, `.env`, backups, and the deployment record are intentionally
-untracked. To test another service source, change its `*_GIT_URL` and `*_GIT_REF` values before the
-first deploy or remove only its clean checkout under `.runtime/sources/`.
+Runtime checkouts, Compose data, `.env`, backups, and the deployment record are
+intentionally untracked. To test another source revision, change its `*_GIT_URL`
+or `*_GIT_REF` values before the first deploy or remove only its clean checkout
+under `.runtime/sources/`.

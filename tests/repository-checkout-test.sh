@@ -62,7 +62,7 @@ printf 'SEMANTIC_API_TOKEN=test-token\nSEMANTIC_HOST_PORT=18080\n' > "${ENV_FILE
 REVISION_SHA=0123456789abcdef0123456789abcdef01234567
 CURL_MARKER="${TEMPORARY_DIRECTORY}/curl-valid-checkout"
 
-main checkout java-system-agent "${REVISION_SHA}"
+main checkout payment-service "${REVISION_SHA}"
 
 assert_curl_arguments "checkout" \
     --fail \
@@ -76,7 +76,7 @@ assert_curl_arguments "checkout" \
     'Content-Type: application/json' \
     --data \
     "{\"revision\":\"${REVISION_SHA}\"}" \
-    'http://127.0.0.1:18080/v1/repositories/java-system-agent/checkout'
+    'http://127.0.0.1:18080/v1/repositories/payment-service/checkout'
 
 CURL_MARKER="${TEMPORARY_DIRECTORY}/curl-list"
 main list
@@ -91,7 +91,7 @@ assert_curl_arguments "list" \
     'http://127.0.0.1:18080/v1/repositories'
 
 CURL_MARKER="${TEMPORARY_DIRECTORY}/curl-sync"
-main sync java-system-agent
+main sync payment-service
 assert_curl_arguments "sync" \
     --fail \
     --silent \
@@ -104,11 +104,11 @@ assert_curl_arguments "sync" \
     'Content-Type: application/json' \
     --data \
     '{}' \
-    'http://127.0.0.1:18080/v1/repositories/java-system-agent/sync'
+    'http://127.0.0.1:18080/v1/repositories/payment-service/sync'
 
-assert_checkout_fails_without_curl "invalid-repository" JAVA_SYSTEM_AGENT "${REVISION_SHA}"
-assert_checkout_fails_without_curl "uppercase-revision" java-system-agent 0123456789ABCDEF0123456789ABCDEF01234567
-assert_checkout_fails_without_curl "short-revision" java-system-agent 0123456789abcdef0123456789abcdef0123456
-assert_checkout_fails_without_curl "nonhex-revision" java-system-agent g123456789abcdef0123456789abcdef01234567
-assert_checkout_fails_without_curl "missing-revision" java-system-agent
-assert_checkout_fails_without_curl "extra-argument" java-system-agent "${REVISION_SHA}" unexpected
+assert_checkout_fails_without_curl "invalid-repository" PAYMENT_SERVICE "${REVISION_SHA}"
+assert_checkout_fails_without_curl "uppercase-revision" payment-service 0123456789ABCDEF0123456789ABCDEF01234567
+assert_checkout_fails_without_curl "short-revision" payment-service 0123456789abcdef0123456789abcdef0123456
+assert_checkout_fails_without_curl "nonhex-revision" payment-service g123456789abcdef0123456789abcdef01234567
+assert_checkout_fails_without_curl "missing-revision" payment-service
+assert_checkout_fails_without_curl "extra-argument" payment-service "${REVISION_SHA}" unexpected
