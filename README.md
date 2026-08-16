@@ -11,9 +11,11 @@ Cross-service ownership and acceptance milestones are in
 ## Start
 
 Requirements: Git, Docker Engine with Compose v2, SSH access to the Runtime and
-Semantic repositories, and a Google API key. On an initial deployment, let
-`deploy.sh` create `.env` with local Semantic and PostgreSQL secrets. It stops
-until `GOOGLE_API_KEY` is set; add that key to `.env` and rerun it.
+Semantic repositories, and a Google API key. Running `runtime-uat.sh` also
+requires Maven and JDK 21 installed at `/usr/lib/jvm/java-21-openjdk-amd64`, the
+path used by the script. On an initial deployment, let `deploy.sh` create `.env`
+with local Semantic and PostgreSQL secrets. It stops until `GOOGLE_API_KEY` is
+set; add that key to `.env` and rerun it.
 
 ```bash
 git clone git@github.com:ChouKevin/java-agent-starter.git
