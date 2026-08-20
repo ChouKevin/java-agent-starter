@@ -78,8 +78,9 @@ SLACK_BOT_TOKEN=contract-slack-bot-token
 SLACK_BOT_USER_ID=contract-slack-user-id
 EOF
 
-compose_json="$(docker compose --env-file "${CONTRACT_ENV}" -f "${ROOT}/compose.yaml" config --format json)"
-profiled_compose_json="$(docker compose --env-file "${CONTRACT_ENV}" --profile setup --profile semantic-check --profile runtime-check -f "${ROOT}/compose.yaml" config --format json)"
+compose_json="$(docker compose --project-name starter-contract --env-file "${CONTRACT_ENV}" -f "${ROOT}/compose.yaml" config --format json)"
+compose_source_json="$(docker compose --project-name starter-contract --env-file "${CONTRACT_ENV}" -f "${ROOT}/compose.yaml" config --no-normalize --format json)"
+profiled_compose_json="$(docker compose --project-name starter-contract --env-file "${CONTRACT_ENV}" --profile setup --profile semantic-check --profile runtime-check -f "${ROOT}/compose.yaml" config --format json)"
 
 jq -e --arg starter_root "${ROOT}" '
   (.services | keys == ["semantic-service", "session-agent-postgres", "session-agent-runtime"])
@@ -108,9 +109,13 @@ jq -e --arg starter_root "${ROOT}" '
     {"mode":"ingress","host_ip":"127.0.0.1","target":8080,"published":"8090","protocol":"tcp"}
   ]
   and (.volumes | keys == ["order-service-fixture", "payment-service-fixture", "semantic-jdt-data", "semantic-repository-data", "session-agent-postgres-data"])
-  and ([.volumes[] | has("name")] | any | not)
   and (.networks | keys == ["session-agent-network"])
 ' <<< "${compose_json}" >/dev/null
+
+jq -e '
+  (.volumes | keys == ["order-service-fixture", "payment-service-fixture", "semantic-jdt-data", "semantic-repository-data", "session-agent-postgres-data"])
+  and ([.volumes[] | has("name")] | any | not)
+' <<< "${compose_source_json}" >/dev/null
 
 jq -e '
   (.services | keys == ["fixture-init", "runtime-probe", "semantic-probe", "semantic-service", "session-agent-postgres", "session-agent-runtime"])
@@ -130,7 +135,7 @@ jq -e '
   and (.services["semantic-probe"].command | join(" ") | contains("curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" http://semantic-service:8080/v1/repositories >/dev/null"))
   and (.services["semantic-probe"].command | join(" ") | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null"))
   and (.services["semantic-probe"].command | join(" ") | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null"))
-  and (.services["semantic-probe"].command | join(" ") | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 30 http://semantic-service:8080/v1/repositories/payment-service/status >/dev/null"))
+  and (.services["semantic-probe"].command | join(" ") | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 30 http://semantic-service:8080/v1/repositories/payment-service >/dev/null"))
   and (.services["semantic-probe"].command | join(" ") | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 \\\"http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE\\\" >/dev/null"))
   and (.services["semantic-probe"].command | join(" ") | split("--retry") | length == 2)
   and (.services["semantic-probe"].command | join(" ") | split(">/dev/null") | length == 6)
