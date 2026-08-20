@@ -21,28 +21,28 @@ env_value() {
     esac
 }
 env_or_default() { printf '%s' "$2"; }
-preflight_active_deployment() { printf 'preflight\n' >> "${call_log}"; }
-prepare_host_paths() { printf 'prepare\n' >> "${call_log}"; }
-prepare_or_resume_sources() { printf 'sources:%s:%s\n' "$1" "$3" >> "${call_log}"; export FIXTURE_VOLUME_SUFFIX=prepared-fixture; }
-prepare_target_fixture_volumes() { printf 'fixtures\n' >> "${call_log}"; }
+prepare_host_paths() { :; }
+prepare_sources() {
+    printf 'sources:%s:%s:%s:%s\n' "$1" "$2" "$3" "$4" >> "${call_log}"
+}
+clear_deployment_record() { printf 'record-clear\n' >> "${call_log}"; }
 write_deployment_record() { printf 'record\n' >> "${call_log}"; }
 
+semantic_probe_fails=0
 docker() {
     local -a arguments=("$@")
     local index
+
     if [[ "$*" == "compose version" ]]; then
         return
     fi
     for ((index = 0; index < ${#arguments[@]}; index++)); do
         case "${arguments[${index}]}" in
-            ps)
-                printf 'session-agent-postgres|running|healthy\n'
-                printf 'semantic-service|running|\n'
-                printf 'session-agent-runtime|running|\n'
-                return
-                ;;
-            build|up|--profile)
+            build|down|up|--profile)
                 printf 'compose:%s\n' "${arguments[*]:${index}}" >> "${call_log}"
+                if [[ "${semantic_probe_fails}" -eq 1 && "${arguments[*]:${index}}" == "--profile semantic-check run --rm semantic-probe" ]]; then
+                    return 1
+                fi
                 return
                 ;;
         esac
@@ -51,7 +51,7 @@ docker() {
 
 main > "${temporary_directory}/output.log"
 
-expected=$'preflight\nprepare\nsources:git@github.com:ChouKevin/session-agent-runtime.git:git@github.com:ChouKevin/java-code-intelligence.git\ncompose:build session-agent-runtime semantic-service\nfixtures\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240\ncompose:--profile tools run --rm network-probe\nrecord'
+expected=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat\ncompose:build semantic-service session-agent-runtime\nrecord-clear\ncompose:down --remove-orphans --volumes\ncompose:up -d --wait --wait-timeout 240 session-agent-postgres\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240 semantic-service\ncompose:--profile semantic-check run --rm semantic-probe\ncompose:up -d --wait --wait-timeout 240 session-agent-runtime\ncompose:--profile runtime-check run --rm runtime-probe\nrecord'
 actual="$(<"${call_log}")"
 [[ "${actual}" == "${expected}" ]] || {
     printf 'unexpected deployment calls\nexpected:\n%s\nactual:\n%s\n' \
@@ -59,3 +59,21 @@ actual="$(<"${call_log}")"
     exit 1
 }
 grep -Fq 'Session Agent UAT stack started' "${temporary_directory}/output.log"
+
+: > "${call_log}"
+eval "exec ${DEPLOY_LOCK_FD}>&-"
+semantic_probe_fails=1
+set +e
+(set -e; main) > "${temporary_directory}/semantic-probe-failure.log" 2>&1
+failure_status=$?
+set -e
+[[ "${failure_status}" -ne 0 ]] || {
+    printf 'semantic probe failure unexpectedly succeeded\n' >&2
+    exit 1
+}
+actual="$(<"${call_log}")"
+expected_failure=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat\ncompose:build semantic-service session-agent-runtime\nrecord-clear\ncompose:down --remove-orphans --volumes\ncompose:up -d --wait --wait-timeout 240 session-agent-postgres\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240 semantic-service\ncompose:--profile semantic-check run --rm semantic-probe'
+[[ "${actual}" == "${expected_failure}" ]] || {
+    printf 'semantic probe failure started Runtime, probed Runtime, or wrote a record\nactual:\n%s\n' "${actual}" >&2
+    exit 1
+}
