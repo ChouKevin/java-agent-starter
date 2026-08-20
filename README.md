@@ -40,8 +40,8 @@ Runtime. It records the exact Runtime and Semantic source SHAs in
 
 The Runtime and Semantic checkouts are one deployment pair. Later runs accept
 only clean checkouts on the configured branches and advance them by
-fast-forward; the recorded SHAs identify the compatible pair used by that UAT
-run. Source staging is validated before either checkout is promoted.
+fast-forward; the recorded SHAs identify the exact pair used by that UAT run.
+Source staging is validated before either checkout is promoted.
 
 If a deployment fails after the existing project has been reset, it may leave a
 partial project. The supported recovery is to rerun `./deploy.sh` from the
@@ -97,7 +97,7 @@ uat logs -f session-agent-runtime
 uat logs -f semantic-service
 ```
 
-Runtime checkouts, Compose data, `.env`, backups, and the deployment record are
+Runtime checkouts, Compose data, `.env`, and the deployment record are
 intentionally untracked. To test another source revision, change its `*_GIT_URL`
 or `*_GIT_REF` values before the first deploy or remove only its clean checkout
 under `.runtime/sources/`.
