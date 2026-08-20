@@ -165,6 +165,35 @@ if find "${unchanged_sources}" -maxdepth 1 -type d -name '.staging.*' -print -qu
     exit 1
 fi
 
+seed_repository runtime-advanced
+advanced_sources="${temporary_directory}/advanced-sources"
+mkdir -p "${advanced_sources}"
+git clone --quiet --branch main "${temporary_directory}/runtime-advanced.git" "${advanced_sources}/session-agent-runtime"
+append_and_push runtime-advanced
+advanced_target_sha="$(remote_branch_sha "Session Agent Runtime" "${temporary_directory}/runtime-advanced.git" main)"
+advanced_staging_root="$(mktemp -d "${advanced_sources}/.staging.XXXXXX")"
+advanced_staging_directory="${advanced_staging_root}/session-agent-runtime"
+stage_source_at_target "Session Agent Runtime" "${temporary_directory}/runtime-advanced.git" main \
+    "${advanced_staging_directory}" "${advanced_target_sha}"
+append_and_push runtime-advanced
+git -C "${advanced_sources}/session-agent-runtime" fetch --quiet origin main
+git -C "${advanced_sources}/session-agent-runtime" merge --ff-only origin/main >/dev/null
+advanced_checkout_sha="$(git -C "${advanced_sources}/session-agent-runtime" rev-parse HEAD)"
+if (
+    INVOCATION_STAGING_ROOT="${advanced_staging_root}"
+    promote_staged_source "Session Agent Runtime" "${advanced_sources}/session-agent-runtime" \
+        "${advanced_staging_directory}" main "${advanced_target_sha}"
+); then
+    printf 'promotion accepted an externally advanced source checkout\n' >&2
+    exit 1
+fi
+assert_equals "${advanced_checkout_sha}" "$(git -C "${advanced_sources}/session-agent-runtime" rev-parse HEAD)" \
+    "rejected source promotion preserves the externally advanced checkout"
+[[ ! -e "${advanced_staging_root}" ]] || {
+    printf 'rejected source promotion left invocation staging behind\n' >&2
+    exit 1
+}
+
 DEPLOYMENT_RECORD_FILE="${temporary_directory}/deployment-record.txt"
 write_deployment_record
 mapfile -t record_lines < "${DEPLOYMENT_RECORD_FILE}"

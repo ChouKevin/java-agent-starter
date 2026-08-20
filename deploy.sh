@@ -164,6 +164,7 @@ promote_staged_source() {
     local staging_directory="$3"
     local branch="$4"
     local target_sha="$5"
+    local actual_sha
 
     if [[ -e "${directory}" ]]; then
         git -C "${directory}" fetch --no-tags "${staging_directory}" "refs/heads/${branch}" >/dev/null \
@@ -174,6 +175,10 @@ promote_staged_source() {
         mv "${staging_directory}" "${directory}" \
             || fail "${label} staged target could not be promoted"
     fi
+    actual_sha="$(git -C "${directory}" rev-parse HEAD)" \
+        || fail "${label} promoted source HEAD could not be resolved"
+    [[ "${actual_sha}" == "${target_sha}" ]] \
+        || fail "${label} source changed during promotion"
 }
 
 prepare_sources() {
