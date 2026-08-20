@@ -72,18 +72,12 @@ services:
     image: alpine:3.22
     profiles: [setup]
     user: "0:0"
-    environment:
-      FIXTURE_VOLUME_SUFFIX: ${FIXTURE_VOLUME_SUFFIX:?FIXTURE_VOLUME_SUFFIX is required}
     entrypoint: ["/bin/sh", "-ec"]
     command:
       - >-
-        test ! -e /fixtures/payment-service/.fixture-ready &&
-        test ! -e /fixtures/order-service/.fixture-ready &&
         cp -a /fixture-source/payment-service/. /fixtures/payment-service/ &&
         cp -a /fixture-source/order-service/. /fixtures/order-service/ &&
-        chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service &&
-        printf '%s\n' "$$FIXTURE_VOLUME_SUFFIX" > /fixtures/payment-service/.fixture-ready &&
-        printf '%s\n' "$$FIXTURE_VOLUME_SUFFIX" > /fixtures/order-service/.fixture-ready
+        chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service
     volumes:
       - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/payment-service:/fixture-source/payment-service:ro
       - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/order-service:/fixture-source/order-service:ro
@@ -92,14 +86,12 @@ services:
     restart: "no"
     networks: [session-agent-network]
 
-  network-probe:
+  semantic-probe:
     <<: *runtime-logging
     image: curlimages/curl:8.12.1
-    profiles: [tools]
+    profiles: [semantic-check]
     depends_on:
       semantic-service:
-        condition: service_started
-      session-agent-runtime:
         condition: service_started
     environment:
       SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN:?required}
@@ -110,6 +102,35 @@ services:
         --retry-connrefused --connect-timeout 5 --max-time 10
         -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
         http://semantic-service:8080/v1/repositories >/dev/null &&
+        curl --fail --silent --show-error -X POST
+        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
+        --connect-timeout 5 --max-time 120
+        http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null &&
+        curl --fail --silent --show-error -X POST
+        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
+        --connect-timeout 5 --max-time 120
+        http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null &&
+        curl --fail --silent --show-error
+        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
+        --connect-timeout 5 --max-time 30
+        http://semantic-service:8080/v1/repositories/payment-service/status >/dev/null &&
+        curl --fail --silent --show-error
+        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
+        --connect-timeout 5 --max-time 120
+        "http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE" >/dev/null
+    restart: "no"
+    networks: [session-agent-network]
+
+  runtime-probe:
+    <<: *runtime-logging
+    image: curlimages/curl:8.12.1
+    profiles: [runtime-check]
+    depends_on:
+      session-agent-runtime:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - >-
         curl --fail --silent --show-error --retry 30 --retry-delay 2
         --retry-connrefused --connect-timeout 5 --max-time 10
         http://session-agent-runtime:8080/actuator/health >/dev/null
@@ -119,9 +140,7 @@ services:
 volumes:
   session-agent-postgres-data:
   payment-service-fixture:
-    name: java-agent-uat-payment-fixture-${FIXTURE_VOLUME_SUFFIX:?FIXTURE_VOLUME_SUFFIX is required}
   order-service-fixture:
-    name: java-agent-uat-order-fixture-${FIXTURE_VOLUME_SUFFIX:?FIXTURE_VOLUME_SUFFIX is required}
   semantic-repository-data:
   semantic-jdt-data:
 

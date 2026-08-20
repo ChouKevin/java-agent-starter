@@ -69,7 +69,6 @@ fi
 
 cat > "${CONTRACT_ENV}" <<EOF
 STARTER_ROOT=${ROOT}
-FIXTURE_VOLUME_SUFFIX=dummy-fixture-suffix
 SEMANTIC_API_TOKEN=contract-semantic-token
 SESSION_AGENT_POSTGRES_PASSWORD=contract-postgres-password
 GOOGLE_API_KEY=contract-google-key
@@ -80,7 +79,7 @@ SLACK_BOT_USER_ID=contract-slack-user-id
 EOF
 
 compose_json="$(docker compose --env-file "${CONTRACT_ENV}" -f "${ROOT}/compose.yaml" config --format json)"
-profiled_compose_json="$(docker compose --env-file "${CONTRACT_ENV}" --profile setup --profile tools -f "${ROOT}/compose.yaml" config --format json)"
+profiled_compose_json="$(docker compose --env-file "${CONTRACT_ENV}" --profile setup --profile semantic-check --profile runtime-check -f "${ROOT}/compose.yaml" config --format json)"
 
 jq -e --arg starter_root "${ROOT}" '
   (.services | keys == ["semantic-service", "session-agent-postgres", "session-agent-runtime"])
@@ -109,20 +108,41 @@ jq -e --arg starter_root "${ROOT}" '
     {"mode":"ingress","host_ip":"127.0.0.1","target":8080,"published":"8090","protocol":"tcp"}
   ]
   and (.volumes | keys == ["order-service-fixture", "payment-service-fixture", "semantic-jdt-data", "semantic-repository-data", "session-agent-postgres-data"])
+  and ([.volumes[] | has("name")] | any | not)
   and (.networks | keys == ["session-agent-network"])
 ' <<< "${compose_json}" >/dev/null
 
 jq -e '
-  (.services | keys == ["fixture-init", "network-probe", "semantic-service", "session-agent-postgres", "session-agent-runtime"])
+  (.services | keys == ["fixture-init", "runtime-probe", "semantic-probe", "semantic-service", "session-agent-postgres", "session-agent-runtime"])
   and .services["fixture-init"].profiles == ["setup"]
-  and .services["network-probe"].profiles == ["tools"]
-  and (.services["fixture-init"].command | join(" ") | contains("chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service"))
-  and (.services["fixture-init"].command | join(" ") | contains("cp -a /fixture-source/payment-service/. /fixtures/payment-service/"))
-  and (.services["fixture-init"].command | join(" ") | contains(".fixture-ready"))
+  and .services["semantic-probe"].profiles == ["semantic-check"]
+  and .services["runtime-probe"].profiles == ["runtime-check"]
+  and .services["semantic-probe"].image == "curlimages/curl:8.12.1"
+  and .services["runtime-probe"].image == "curlimages/curl:8.12.1"
+  and (.services["fixture-init"].command | join(" ") == "cp -a /fixture-source/payment-service/. /fixtures/payment-service/ && cp -a /fixture-source/order-service/. /fixtures/order-service/ && chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service")
+  and (.services["fixture-init"].command | join(" ") | contains(".fixture-ready") | not)
   and (.services["fixture-init"].command | join(" ") | contains("find /fixtures") | not)
-  and .volumes["payment-service-fixture"].name == "java-agent-uat-payment-fixture-dummy-fixture-suffix"
-  and .volumes["order-service-fixture"].name == "java-agent-uat-order-fixture-dummy-fixture-suffix"
-  and (.services["network-probe"].command | join(" ") | contains("X-Api-Token: $$SEMANTIC_API_TOKEN"))
-  and (.services["network-probe"].command | join(" ") | contains("http://session-agent-runtime:8080/actuator/health"))
-  and (.services["network-probe"].command | join(" ") | contains("set -x") | not)
+  and (.services["fixture-init"].command | join(" ") | contains("rm -rf") | not)
+  and (.services["fixture-init"].environment | has("FIXTURE_VOLUME_SUFFIX") | not)
+  and (.services["semantic-probe"].depends_on | keys == ["semantic-service"])
+  and .services["semantic-probe"].environment.SEMANTIC_API_TOKEN == "contract-semantic-token"
+  and (.services["semantic-probe"].command | join(" ") | contains("set -x") | not)
+  and (.services["semantic-probe"].command | join(" ") | contains("curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" http://semantic-service:8080/v1/repositories >/dev/null"))
+  and (.services["semantic-probe"].command | join(" ") | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null"))
+  and (.services["semantic-probe"].command | join(" ") | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null"))
+  and (.services["semantic-probe"].command | join(" ") | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 30 http://semantic-service:8080/v1/repositories/payment-service/status >/dev/null"))
+  and (.services["semantic-probe"].command | join(" ") | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 \\\"http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE\\\" >/dev/null"))
+  and (.services["semantic-probe"].command | join(" ") | split("--retry") | length == 2)
+  and (.services["semantic-probe"].command | join(" ") | split(">/dev/null") | length == 6)
+  and (.services["semantic-probe"].command | join(" ") | contains("session-agent-runtime") | not)
+  and (.services["runtime-probe"].depends_on | keys == ["session-agent-runtime"])
+  and (.services["runtime-probe"] | has("environment") | not)
+  and (.services["runtime-probe"].command | join(" ") == "curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 http://session-agent-runtime:8080/actuator/health >/dev/null")
+  and (.services["runtime-probe"].command | join(" ") | contains("semantic-service") | not)
+  and (.services["runtime-probe"].command | join(" ") | contains("SEMANTIC_API_TOKEN") | not)
 ' <<< "${profiled_compose_json}" >/dev/null
+
+if rg -n 'FIXTURE_VOLUME_SUFFIX|network-probe|profiles: \[tools\]' "${ROOT}/compose.yaml" >/dev/null; then
+    printf 'legacy fixture suffix or combined probe remains\n' >&2
+    exit 1
+fi
