@@ -118,6 +118,9 @@ jq -e '
 ' <<< "${compose_source_json}" >/dev/null
 
 jq -e '
+  (.services["semantic-probe"].command | join(" ")) as $semantic_command
+  | ($semantic_command | split(" && ")) as $semantic_requests
+  | (
   (.services | keys == ["fixture-init", "runtime-probe", "semantic-probe", "semantic-service", "session-agent-postgres", "session-agent-runtime"])
   and .services["fixture-init"].profiles == ["setup"]
   and .services["semantic-probe"].profiles == ["semantic-check"]
@@ -128,23 +131,25 @@ jq -e '
   and (.services["fixture-init"].command | join(" ") | contains(".fixture-ready") | not)
   and (.services["fixture-init"].command | join(" ") | contains("find /fixtures") | not)
   and (.services["fixture-init"].command | join(" ") | contains("rm -rf") | not)
-  and (.services["fixture-init"].environment | has("FIXTURE_VOLUME_SUFFIX") | not)
+  and (.services["fixture-init"] | has("environment") | not)
   and (.services["semantic-probe"].depends_on | keys == ["semantic-service"])
   and .services["semantic-probe"].environment.SEMANTIC_API_TOKEN == "contract-semantic-token"
-  and (.services["semantic-probe"].command | join(" ") | contains("set -x") | not)
-  and (.services["semantic-probe"].command | join(" ") | contains("curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" http://semantic-service:8080/v1/repositories >/dev/null"))
-  and (.services["semantic-probe"].command | join(" ") | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null"))
-  and (.services["semantic-probe"].command | join(" ") | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null"))
-  and (.services["semantic-probe"].command | join(" ") | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 30 http://semantic-service:8080/v1/repositories/payment-service >/dev/null"))
-  and (.services["semantic-probe"].command | join(" ") | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 \\\"http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE\\\" >/dev/null"))
-  and (.services["semantic-probe"].command | join(" ") | split("--retry") | length == 2)
-  and (.services["semantic-probe"].command | join(" ") | split(">/dev/null") | length == 6)
-  and (.services["semantic-probe"].command | join(" ") | contains("session-agent-runtime") | not)
+  and ($semantic_command | contains("set -x") | not)
+  and ($semantic_requests | length == 5)
+  and ($semantic_requests[0] | contains("curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" http://semantic-service:8080/v1/repositories >/dev/null"))
+  and ($semantic_requests[1] | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null"))
+  and ($semantic_requests[2] | contains("-X POST -H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null"))
+  and ($semantic_requests[3] | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 30 http://semantic-service:8080/v1/repositories/payment-service >/dev/null"))
+  and ($semantic_requests[4] | contains("-H \\\"X-Api-Token: $$SEMANTIC_API_TOKEN\\\" --connect-timeout 5 --max-time 120 \\\"http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE\\\" >/dev/null"))
+  and ([$semantic_requests[1:5][] | contains("--retry")] | any | not)
+  and ([$semantic_requests[] | endswith(">/dev/null")] | all)
+  and ($semantic_command | contains("session-agent-runtime") | not)
   and (.services["runtime-probe"].depends_on | keys == ["session-agent-runtime"])
   and (.services["runtime-probe"] | has("environment") | not)
   and (.services["runtime-probe"].command | join(" ") == "curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 http://session-agent-runtime:8080/actuator/health >/dev/null")
   and (.services["runtime-probe"].command | join(" ") | contains("semantic-service") | not)
   and (.services["runtime-probe"].command | join(" ") | contains("SEMANTIC_API_TOKEN") | not)
+  )
 ' <<< "${profiled_compose_json}" >/dev/null
 
 if rg -n 'FIXTURE_VOLUME_SUFFIX|network-probe|profiles: \[tools\]' "${ROOT}/compose.yaml" >/dev/null; then
