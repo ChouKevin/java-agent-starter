@@ -35,8 +35,8 @@ services:
       - "127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"
     volumes:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
-      - payment-service-fixture:/fixtures/payment-service:ro
-      - order-service-fixture:/fixtures/order-service:ro
+      - payment-service-fixture:/fixtures/payment-service
+      - order-service-fixture:/fixtures/order-service
       - semantic-repository-data:/data/repos
       - semantic-jdt-data:/data/jdtls
     networks: [session-agent-network]
@@ -117,7 +117,13 @@ services:
         curl --fail --silent --show-error
         -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
         --connect-timeout 5 --max-time 120
-        "http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE" >/dev/null
+        "http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE" >/dev/null &&
+        curl --fail --silent --show-error -X POST
+        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
+        -H "Content-Type: application/json"
+        --connect-timeout 5 --max-time 120
+        --data-binary '{"repoId":"payment-service","expectedRevision":"FIXTURE","target":{"kind":"METHOD","identity":{"sourceType":{"javaType":{"packageName":"com.example.payment","className":"PaymentFeeSettings"},"sourceFile":"src/main/java/com/example/payment/PaymentFeeSettings.java"},"methodName":"loadFeeFormulaJson","parameterTypes":["com.example.payment.PaymentMethod"]}},"offset":0,"limit":50}'
+        http://semantic-service:8080/v1/discovery/internal-references >/dev/null
     restart: "no"
     networks: [session-agent-network]
 

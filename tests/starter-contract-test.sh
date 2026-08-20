@@ -106,6 +106,9 @@ jq -e --arg starter_root "${ROOT}" '
   and .services["semantic-service"].ports == [
     {"mode":"ingress","host_ip":"127.0.0.1","target":8080,"published":"8080","protocol":"tcp"}
   ]
+  and ([.services["semantic-service"].volumes[]
+        | select(.target == "/fixtures/payment-service" or .target == "/fixtures/order-service")
+        | (.read_only // false)] == [false, false])
   and .services["session-agent-runtime"].ports == [
     {"mode":"ingress","host_ip":"127.0.0.1","target":8080,"published":"8090","protocol":"tcp"}
   ]
@@ -136,13 +139,18 @@ jq -e '
   and (.services["semantic-probe"].depends_on | keys == ["semantic-service"])
   and .services["semantic-probe"].environment.SEMANTIC_API_TOKEN == "contract-semantic-token"
   and ($semantic_command | contains("set -x") | not)
-  and ($semantic_requests | length == 5)
+  and ($semantic_requests | length == 6)
   and ($semantic_requests[0] | contains("curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 -H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" http://semantic-service:8080/v1/repositories >/dev/null"))
   and ($semantic_requests[1] | contains("-X POST -H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null"))
   and ($semantic_requests[2] | contains("-X POST -H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null"))
   and ($semantic_requests[3] | contains("-H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 30 http://semantic-service:8080/v1/repositories/payment-service >/dev/null"))
   and ($semantic_requests[4] | contains("-H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 120 \"http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE\" >/dev/null"))
-  and ([$semantic_requests[1:5][] | contains("--retry")] | any | not)
+  and ($semantic_requests[5] | contains("-X POST"))
+  and ($semantic_requests[5] | contains("-H \"Content-Type: application/json\""))
+  and ($semantic_requests[5] | contains("\"repoId\":\"payment-service\",\"expectedRevision\":\"FIXTURE\""))
+  and ($semantic_requests[5] | contains("\"methodName\":\"loadFeeFormulaJson\""))
+  and ($semantic_requests[5] | contains("http://semantic-service:8080/v1/discovery/internal-references >/dev/null"))
+  and ([$semantic_requests[1:6][] | contains("--retry")] | any | not)
   and ([$semantic_requests[] | endswith(">/dev/null")] | all)
   and ($semantic_command | contains("session-agent-runtime") | not)
   and (.services["runtime-probe"].depends_on | keys == ["session-agent-runtime"])
