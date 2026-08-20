@@ -26,15 +26,31 @@ assert_prepare_fails() {
     local runtime_ref="$3"
     local semantic_url="$4"
     local semantic_ref="$5"
+    local expected_diagnostic="$6"
+    local runtime_required_commit
+    local diagnostic_file="${temporary_directory}/prepare-failure-${RANDOM}.log"
+
+    runtime_required_commit="$(git ls-remote --heads "${runtime_url}" "refs/heads/${runtime_ref}" | cut -f1)"
+    [[ -n "${runtime_required_commit}" ]] || {
+        printf 'test Runtime target is unavailable\n' >&2
+        exit 1
+    }
 
     if bash -c '
         source "$1"
         SOURCES_DIR="$2"
-        prepare_sources "$3" "$4" "$5" "$6"
-    ' _ "${ROOT}/deploy.sh" "${sources_directory}" "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}" >/dev/null 2>&1; then
+        prepare_sources "$3" "$4" "$5" "$6" "$7"
+    ' _ "${ROOT}/deploy.sh" "${sources_directory}" "${runtime_url}" "${runtime_ref}" \
+        "${semantic_url}" "${semantic_ref}" "${runtime_required_commit}" >"${diagnostic_file}" 2>&1; then
         printf 'paired source preparation unexpectedly succeeded\n' >&2
         exit 1
     fi
+    grep -Fq "${expected_diagnostic}" "${diagnostic_file}" || {
+        printf 'paired source preparation failed for the wrong reason; expected: %s\n' \
+            "${expected_diagnostic}" >&2
+        cat "${diagnostic_file}" >&2
+        exit 1
+    }
 }
 
 seed_repository() {
@@ -117,7 +133,8 @@ runtime_before="$(git -C "${wrong_origin_sources}/session-agent-runtime" rev-par
 semantic_before="$(git -C "${wrong_origin_sources}/java-code-intelligence" rev-parse HEAD)"
 append_and_push runtime
 append_and_push semantic
-assert_prepare_fails "${wrong_origin_sources}" "${temporary_directory}/runtime.git" main "${temporary_directory}/semantic.git" main
+assert_prepare_fails "${wrong_origin_sources}" "${temporary_directory}/runtime.git" main \
+    "${temporary_directory}/semantic.git" main "Semantic origin mismatch"
 assert_equals "${runtime_before}" "$(git -C "${wrong_origin_sources}/session-agent-runtime" rev-parse HEAD)" "wrong second origin leaves Runtime unchanged"
 assert_equals "${semantic_before}" "$(git -C "${wrong_origin_sources}/java-code-intelligence" rev-parse HEAD)" "wrong second origin leaves Semantic unchanged"
 
@@ -129,7 +146,8 @@ runtime_before="$(git -C "${dirty_sources}/session-agent-runtime" rev-parse HEAD
 semantic_before="$(git -C "${dirty_sources}/java-code-intelligence" rev-parse HEAD)"
 append_and_push runtime
 touch "${dirty_sources}/java-code-intelligence/dirty.txt"
-assert_prepare_fails "${dirty_sources}" "${temporary_directory}/runtime.git" main "${temporary_directory}/semantic.git" main
+assert_prepare_fails "${dirty_sources}" "${temporary_directory}/runtime.git" main \
+    "${temporary_directory}/semantic.git" main "Semantic source has local changes"
 assert_equals "${runtime_before}" "$(git -C "${dirty_sources}/session-agent-runtime" rev-parse HEAD)" "dirty second checkout leaves Runtime unchanged"
 assert_equals "${semantic_before}" "$(git -C "${dirty_sources}/java-code-intelligence" rev-parse HEAD)" "dirty second checkout leaves Semantic unchanged"
 
@@ -142,7 +160,8 @@ semantic_before="$(git -C "${missing_sources}/java-code-intelligence" rev-parse 
 append_and_push runtime
 git -C "${temporary_directory}/semantic.git" symbolic-ref HEAD refs/heads/absent
 git -C "${temporary_directory}/semantic-seed" push --quiet origin :main
-assert_prepare_fails "${missing_sources}" "${temporary_directory}/runtime.git" main "${temporary_directory}/semantic.git" main
+assert_prepare_fails "${missing_sources}" "${temporary_directory}/runtime.git" main \
+    "${temporary_directory}/semantic.git" main "Semantic remote branch is missing or ambiguous"
 assert_equals "${runtime_before}" "$(git -C "${missing_sources}/session-agent-runtime" rev-parse HEAD)" "missing second target leaves Runtime unchanged"
 assert_equals "${semantic_before}" "$(git -C "${missing_sources}/java-code-intelligence" rev-parse HEAD)" "missing second target leaves Semantic unchanged"
 
@@ -162,7 +181,8 @@ git -C "${semantic_non_ff_seed}" add .
 git -C "${semantic_non_ff_seed}" commit --quiet -m replacement
 git -C "${semantic_non_ff_seed}" branch -M main
 git -C "${semantic_non_ff_seed}" push --quiet --force origin main
-assert_prepare_fails "${non_ff_sources}" "${temporary_directory}/runtime.git" main "${temporary_directory}/semantic-non-ff.git" main
+assert_prepare_fails "${non_ff_sources}" "${temporary_directory}/runtime.git" main \
+    "${temporary_directory}/semantic-non-ff.git" main "Semantic update is not fast-forward eligible"
 assert_equals "${runtime_before}" "$(git -C "${non_ff_sources}/session-agent-runtime" rev-parse HEAD)" "non-fast-forward second target leaves Runtime unchanged"
 assert_equals "${semantic_before}" "$(git -C "${non_ff_sources}/java-code-intelligence" rev-parse HEAD)" "non-fast-forward second target leaves Semantic unchanged"
 
@@ -181,10 +201,16 @@ assert_equals "${semantic_before}" "$(git -C "${unchanged_sources}/java-code-int
 assert_equals "${runtime_before}" "${DEPLOYMENT_RUNTIME_TARGET_SHA}" "Runtime target SHA is captured from staging"
 assert_equals "${semantic_before}" "${DEPLOYMENT_SEMANTIC_TARGET_SHA}" "Semantic target SHA is captured from staging"
 touch "${unchanged_sources}/session-agent-runtime/mutated-during-build.txt"
-if validate_deployment_sources; then
+source_authority_diagnostic="${temporary_directory}/source-authority-failure.log"
+if (validate_deployment_sources) >"${source_authority_diagnostic}" 2>&1; then
     printf 'source authority validation accepted a mutated managed source\n' >&2
     exit 1
 fi
+grep -Fq "Session Agent Runtime source has local changes" "${source_authority_diagnostic}" || {
+    printf 'source authority validation failed for the wrong reason\n' >&2
+    cat "${source_authority_diagnostic}" >&2
+    exit 1
+}
 rm "${unchanged_sources}/session-agent-runtime/mutated-during-build.txt"
 if find "${unchanged_sources}" -maxdepth 1 -type d -name '.staging.*' -print -quit | grep -q .; then
     printf 'source preparation left invocation staging behind\n' >&2
