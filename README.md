@@ -43,6 +43,14 @@ only clean checkouts on the configured branches and advance them by
 fast-forward; the recorded SHAs identify the exact pair used by that UAT run.
 Source staging is validated before either checkout is promoted.
 
+The Runtime target must contain
+`a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee`, which switches its Semantic
+authentication to `X-Api-Token`. The default remote `main` currently does not
+contain that commit, so deployment safely stops before changing either managed
+checkout or the Compose project until the commit is integrated. For local UAT,
+set `SESSION_AGENT_GIT_URL=/home/shuu/session-agent-runtime` in `.env`; that
+checkout currently contains the required commit.
+
 If a deployment fails after the existing project has been reset, it may leave a
 partial project. The supported recovery is to rerun `./deploy.sh` from the
 beginning; no alternate recovery procedure is supported.
@@ -64,6 +72,14 @@ bounded external `SessionAgentLiveIT` selected from the checked-out Runtime
 Google key, and configured model through the process environment, and does not
 print their values. This documents what the command does; it does not claim that
 LiveIT has run or succeeded.
+
+The Runtime's public pre-success probe is health-only; its existing public
+Semantic calls occur through the conversation/tool flow and can require model
+execution. Starter therefore cannot add a model-independent Runtime-to-Semantic
+authenticated success operation without changing Runtime. The existing
+authenticated Semantic probe and the required Runtime commit gate are the UAT
+checks before LiveIT; the Runtime-to-Semantic operation remains covered by
+LiveIT.
 
 The Runtime owns the conversation and tool loop, citations, persistence, live
 acceptance, and its dedicated database. It uses Semantic for repository/source

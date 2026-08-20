@@ -6,7 +6,9 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ENV_FILE="${ROOT}/.env"
 RUNTIME_SOURCE="${ROOT}/.runtime/sources/session-agent-runtime"
 
-fail() {
+source "${ROOT}/deploy.sh"
+
+runtime_uat_fail() {
     printf 'runtime-uat: %s\n' "$*" >&2
     exit 1
 }
@@ -32,24 +34,24 @@ env_or_default() {
     fi
 }
 
-main() {
+runtime_uat_main() {
     local semantic_token
     local google_key
     local model
     local runtime_port
     local semantic_port
 
-    [[ "$#" -eq 0 ]] || fail "usage: ./runtime-uat.sh"
-    "${ROOT}/deploy.sh"
-    [[ -f "${RUNTIME_SOURCE}/pom.xml" ]] || fail "Session Agent Runtime source is unavailable"
+    [[ "$#" -eq 0 ]] || runtime_uat_fail "usage: ./runtime-uat.sh"
+    main
+    [[ -f "${RUNTIME_SOURCE}/pom.xml" ]] || runtime_uat_fail "Session Agent Runtime source is unavailable"
 
     semantic_token="$(env_value SEMANTIC_API_TOKEN)"
     google_key="$(env_value GOOGLE_API_KEY)"
     model="$(env_or_default GOOGLE_GENAI_MODEL gemini-3.1-flash-lite)"
     runtime_port="$(env_or_default SESSION_AGENT_HOST_PORT 8090)"
     semantic_port="$(env_or_default SEMANTIC_HOST_PORT 8080)"
-    [[ -n "${semantic_token}" ]] || fail "SEMANTIC_API_TOKEN is blank"
-    [[ -n "${google_key}" ]] || fail "GOOGLE_API_KEY is blank"
+    [[ -n "${semantic_token}" ]] || runtime_uat_fail "SEMANTIC_API_TOKEN is blank"
+    [[ -n "${google_key}" ]] || runtime_uat_fail "GOOGLE_API_KEY is blank"
 
     export SESSION_AGENT_LIVE=true
     export SESSION_AGENT_BASE_URL="http://127.0.0.1:${runtime_port}"
@@ -63,5 +65,5 @@ main() {
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main "$@"
+    runtime_uat_main "$@"
 fi

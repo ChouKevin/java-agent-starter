@@ -33,8 +33,13 @@ EOF
 cat > "${FAKE_STARTER}/deploy.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\$#" -eq 0 ]]
-printf 'deploy\n' >> '${CALL_LOG}'
+main() {
+    [[ "\$#" -eq 0 ]]
+    mkdir -p '${FAKE_STARTER}/.runtime'
+    exec {DEPLOY_LOCK_FD}>'${FAKE_STARTER}/.runtime/deploy.lock'
+    flock -n "\${DEPLOY_LOCK_FD}"
+    printf 'deploy\n' >> '${CALL_LOG}'
+}
 EOF
 chmod +x "${FAKE_STARTER}/deploy.sh"
 
@@ -53,6 +58,10 @@ set -euo pipefail
 [[ "\${SEMANTIC_API_TOKEN}" == '${SECRET_TOKEN}' ]]
 [[ "\${GOOGLE_API_KEY}" == '${SECRET_KEY}' ]]
 [[ "\${GOOGLE_GENAI_MODEL}" == 'contract-model' ]]
+if flock -n '${FAKE_STARTER}/.runtime/deploy.lock' true; then
+    printf 'live acceptance released the deployment lock before Maven finished\n' >&2
+    exit 1
+fi
 printf 'mvn:%s:%s:%s:%s\n' "\${SESSION_AGENT_LIVE}" "\${SESSION_AGENT_BASE_URL}" "\${SEMANTIC_BASE_URL}" "\${GOOGLE_GENAI_MODEL}" >> '${CALL_LOG}'
 EOF
 chmod +x "${FAKE_STARTER}/bin/mvn"

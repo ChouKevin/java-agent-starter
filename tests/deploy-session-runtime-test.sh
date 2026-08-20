@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 temporary_directory="$(mktemp -d)"
 call_log="${temporary_directory}/calls.log"
+required_runtime_commit='a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee'
 
 cleanup() {
     rm -rf "${temporary_directory}"
@@ -11,6 +12,7 @@ cleanup() {
 trap cleanup EXIT
 
 source "${ROOT}/deploy.sh"
+eval "$(declare -f validate_deployment_sources | sed '1s/validate_deployment_sources/real_validate_deployment_sources/')"
 
 create_env_if_missing() { :; }
 env_value() {
@@ -23,12 +25,15 @@ env_value() {
 env_or_default() { printf '%s' "$2"; }
 prepare_host_paths() { :; }
 prepare_sources() {
-    printf 'sources:%s:%s:%s:%s\n' "$1" "$2" "$3" "$4" >> "${call_log}"
+    [[ "$5" == "${required_runtime_commit}" ]]
+    printf 'sources:%s:%s:%s:%s:%s\n' "$1" "$2" "$3" "$4" "$5" >> "${call_log}"
 }
+validate_deployment_sources() { printf 'sources-validated\n' >> "${call_log}"; }
 clear_deployment_record() { printf 'record-clear\n' >> "${call_log}"; }
 write_deployment_record() { printf 'record\n' >> "${call_log}"; }
 
 semantic_probe_fails=0
+mutate_source_during_build=0
 docker() {
     local -a arguments=("$@")
     local index
@@ -40,6 +45,10 @@ docker() {
         case "${arguments[${index}]}" in
             build|down|up|--profile)
                 printf 'compose:%s\n' "${arguments[*]:${index}}" >> "${call_log}"
+                if [[ "${mutate_source_during_build}" -eq 1 && "${arguments[*]:${index}}" == 'build semantic-service session-agent-runtime' ]]; then
+                    touch "${SOURCES_DIR}/session-agent-runtime/mutated-during-build.txt"
+                    mutate_source_during_build=2
+                fi
                 if [[ "${semantic_probe_fails}" -eq 1 && "${arguments[*]:${index}}" == "--profile semantic-check run --rm semantic-probe" ]]; then
                     return 1
                 fi
@@ -51,7 +60,7 @@ docker() {
 
 main > "${temporary_directory}/output.log"
 
-expected=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat\ncompose:build semantic-service session-agent-runtime\nrecord-clear\ncompose:down --remove-orphans --volumes\ncompose:up -d --wait --wait-timeout 240 session-agent-postgres\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240 semantic-service\ncompose:--profile semantic-check run --rm semantic-probe\ncompose:up -d --wait --wait-timeout 240 session-agent-runtime\ncompose:--profile runtime-check run --rm runtime-probe\nrecord'
+expected=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat:a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee\nsources-validated\ncompose:build semantic-service session-agent-runtime\nsources-validated\nrecord-clear\ncompose:down --remove-orphans --volumes\ncompose:up -d --wait --wait-timeout 240 session-agent-postgres\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240 semantic-service\ncompose:--profile semantic-check run --rm semantic-probe\ncompose:up -d --wait --wait-timeout 240 session-agent-runtime\ncompose:--profile runtime-check run --rm runtime-probe\nsources-validated\nrecord'
 actual="$(<"${call_log}")"
 [[ "${actual}" == "${expected}" ]] || {
     printf 'unexpected deployment calls\nexpected:\n%s\nactual:\n%s\n' \
@@ -72,8 +81,59 @@ set -e
     exit 1
 }
 actual="$(<"${call_log}")"
-expected_failure=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat\ncompose:build semantic-service session-agent-runtime\nrecord-clear\ncompose:down --remove-orphans --volumes\ncompose:up -d --wait --wait-timeout 240 session-agent-postgres\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240 semantic-service\ncompose:--profile semantic-check run --rm semantic-probe'
+expected_failure=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat:a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee\nsources-validated\ncompose:build semantic-service session-agent-runtime\nsources-validated\nrecord-clear\ncompose:down --remove-orphans --volumes\ncompose:up -d --wait --wait-timeout 240 session-agent-postgres\ncompose:--profile setup run --rm fixture-init\ncompose:up -d --wait --wait-timeout 240 semantic-service\ncompose:--profile semantic-check run --rm semantic-probe'
 [[ "${actual}" == "${expected_failure}" ]] || {
     printf 'semantic probe failure started Runtime, probed Runtime, or wrote a record\nactual:\n%s\n' "${actual}" >&2
+    exit 1
+}
+
+: > "${call_log}"
+eval "exec ${DEPLOY_LOCK_FD}>&-"
+semantic_probe_fails=0
+mutate_source_during_build=1
+runtime_repository="${temporary_directory}/runtime.git"
+semantic_repository="${temporary_directory}/semantic.git"
+managed_sources="${temporary_directory}/managed-sources"
+for repository in "${runtime_repository}" "${semantic_repository}"; do
+    git init --bare --quiet "${repository}"
+    seed_directory="${repository%.git}-seed"
+    git clone --quiet "${repository}" "${seed_directory}"
+    git -C "${seed_directory}" config user.email deploy-session-runtime-test@example.invalid
+    git -C "${seed_directory}" config user.name deploy-session-runtime-test
+    touch "${seed_directory}/source.txt"
+    git -C "${seed_directory}" add source.txt
+    git -C "${seed_directory}" commit --quiet -m initial
+    git -C "${seed_directory}" branch -M main
+    git -C "${seed_directory}" push --quiet origin main
+done
+mkdir -p "${managed_sources}"
+git clone --quiet --branch main "${runtime_repository}" "${managed_sources}/session-agent-runtime"
+git clone --quiet --branch main "${semantic_repository}" "${managed_sources}/java-code-intelligence"
+SOURCES_DIR="${managed_sources}"
+prepare_sources() {
+    DEPLOYMENT_RUNTIME_URL="${runtime_repository}"
+    DEPLOYMENT_RUNTIME_REF=main
+    DEPLOYMENT_RUNTIME_TARGET_SHA="$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)"
+    DEPLOYMENT_SEMANTIC_URL="${semantic_repository}"
+    DEPLOYMENT_SEMANTIC_REF=main
+    DEPLOYMENT_SEMANTIC_TARGET_SHA="$(git -C "${SOURCES_DIR}/java-code-intelligence" rev-parse HEAD)"
+    printf 'sources:%s:%s:%s:%s:%s\n' "$1" "$2" "$3" "$4" "$5" >> "${call_log}"
+}
+validate_deployment_sources() {
+    printf 'sources-validated\n' >> "${call_log}"
+    real_validate_deployment_sources
+}
+set +e
+(set -e; main) > "${temporary_directory}/source-mutation.log" 2>&1
+failure_status=$?
+set -e
+[[ "${failure_status}" -ne 0 ]] || {
+    printf 'deployment accepted a source mutation during image build\n' >&2
+    exit 1
+}
+actual="$(<"${call_log}")"
+expected_mutation=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat:a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee\nsources-validated\ncompose:build semantic-service session-agent-runtime\nsources-validated'
+[[ "${actual}" == "${expected_mutation}" ]] || {
+    printf 'source mutation did not abort before deployment record clear and Compose teardown\nactual:\n%s\n' "${actual}" >&2
     exit 1
 }

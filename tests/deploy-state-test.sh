@@ -65,6 +65,24 @@ append_and_push() {
 
 source "${ROOT}/deploy.sh"
 
+seed_repository required-runtime
+seed_repository required-semantic
+incompatible_sources="${temporary_directory}/incompatible-sources"
+incompatible_required_sha="$(git -C "${temporary_directory}/required-semantic-seed" rev-parse HEAD)"
+if bash -c '
+    source "$1"
+    SOURCES_DIR="$2"
+    prepare_sources "$3" main "$4" main "$5"
+' _ "${ROOT}/deploy.sh" "${incompatible_sources}" "${temporary_directory}/required-runtime.git" \
+    "${temporary_directory}/required-semantic.git" "${incompatible_required_sha}" >/dev/null 2>&1; then
+    printf 'Runtime target without the required compatible commit was promoted\n' >&2
+    exit 1
+fi
+[[ ! -e "${incompatible_sources}/session-agent-runtime" ]] || {
+    printf 'incompatible Runtime target was promoted despite the required commit gate\n' >&2
+    exit 1
+}
+
 grep -Fq 'if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then' "${ROOT}/deploy.sh" || {
     printf 'deploy.sh must guard main when sourced\n' >&2
     exit 1
@@ -157,9 +175,17 @@ git clone --quiet --branch main "${temporary_directory}/semantic-unchanged.git" 
 runtime_before="$(git -C "${unchanged_sources}/session-agent-runtime" rev-parse HEAD)"
 semantic_before="$(git -C "${unchanged_sources}/java-code-intelligence" rev-parse HEAD)"
 SOURCES_DIR="${unchanged_sources}"
-prepare_sources "${temporary_directory}/runtime-unchanged.git" main "${temporary_directory}/semantic-unchanged.git" main
+prepare_sources "${temporary_directory}/runtime-unchanged.git" main "${temporary_directory}/semantic-unchanged.git" main "${runtime_before}"
 assert_equals "${runtime_before}" "$(git -C "${unchanged_sources}/session-agent-runtime" rev-parse HEAD)" "unchanged Runtime pair succeeds"
 assert_equals "${semantic_before}" "$(git -C "${unchanged_sources}/java-code-intelligence" rev-parse HEAD)" "unchanged Semantic pair succeeds"
+assert_equals "${runtime_before}" "${DEPLOYMENT_RUNTIME_TARGET_SHA}" "Runtime target SHA is captured from staging"
+assert_equals "${semantic_before}" "${DEPLOYMENT_SEMANTIC_TARGET_SHA}" "Semantic target SHA is captured from staging"
+touch "${unchanged_sources}/session-agent-runtime/mutated-during-build.txt"
+if validate_deployment_sources; then
+    printf 'source authority validation accepted a mutated managed source\n' >&2
+    exit 1
+fi
+rm "${unchanged_sources}/session-agent-runtime/mutated-during-build.txt"
 if find "${unchanged_sources}" -maxdepth 1 -type d -name '.staging.*' -print -quit | grep -q .; then
     printf 'source preparation left invocation staging behind\n' >&2
     exit 1

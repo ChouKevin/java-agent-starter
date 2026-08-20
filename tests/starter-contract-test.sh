@@ -43,6 +43,7 @@ done
 grep -Fq '${STARTER_ROOT}/.runtime/sources/session-agent-runtime' "${ROOT}/compose.yaml"
 grep -Fq '${STARTER_ROOT}/.runtime/sources/java-code-intelligence' "${ROOT}/compose.yaml"
 grep -Fq 'Session Agent source SHA:' "${ROOT}/deploy.sh"
+grep -Fq 'a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee' "${ROOT}/deploy.sh"
 grep -Fxq '    payment-service:' "${ROOT}/config/semantic-repositories.yml"
 grep -Fxq '    order-service:' "${ROOT}/config/semantic-repositories.yml"
 [[ ! -d "${ROOT}/session-agent-runtime" ]]

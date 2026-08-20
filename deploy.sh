@@ -7,8 +7,15 @@ ENV_FILE="${ROOT}/.env"
 SOURCES_DIR="${ROOT}/.runtime/sources"
 STARTUP_WAIT_SECONDS=240
 DEPLOYMENT_RECORD_FILE="${ROOT}/deployment-record.txt"
+REQUIRED_RUNTIME_COMMIT='a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee'
 INVOCATION_STAGING_ROOT=""
 DEPLOYMENT_RECORD_TEMP_FILE=""
+DEPLOYMENT_RUNTIME_URL=""
+DEPLOYMENT_RUNTIME_REF=""
+DEPLOYMENT_RUNTIME_TARGET_SHA=""
+DEPLOYMENT_SEMANTIC_URL=""
+DEPLOYMENT_SEMANTIC_REF=""
+DEPLOYMENT_SEMANTIC_TARGET_SHA=""
 
 cleanup_temporary_files() {
     if [[ -n "${INVOCATION_STAGING_ROOT}" ]]; then
@@ -116,6 +123,30 @@ validate_source_checkout() {
         || fail "${label} source has local changes: ${directory}"
 }
 
+validate_source_at_target() {
+    local label="$1"
+    local url="$2"
+    local branch="$3"
+    local directory="$4"
+    local target_sha="$5"
+    local actual_sha
+
+    validate_source_checkout "${label}" "${url}" "${branch}" "${directory}"
+    actual_sha="$(git -C "${directory}" rev-parse HEAD)" \
+        || fail "${label} source HEAD could not be resolved"
+    [[ "${actual_sha}" == "${target_sha}" ]] \
+        || fail "${label} source changed from the staged target"
+}
+
+validate_runtime_required_commit() {
+    local staging_directory="$1"
+    local target_sha="$2"
+    local required_commit="$3"
+
+    git -C "${staging_directory}" merge-base --is-ancestor "${required_commit}" "${target_sha}" \
+        || fail "Session Agent Runtime target ${target_sha} does not contain required compatible commit ${required_commit}"
+}
+
 existing_source_sha() {
     local label="$1"
     local url="$2"
@@ -144,6 +175,7 @@ stage_source_at_target() {
         || fail "${label} remote branch changed during validation: ${branch}"
     git -C "${staging_directory}" reset --hard "${target_sha}" >/dev/null \
         || fail "${label} staged target could not be checked out"
+    validate_source_at_target "${label}" "${url}" "${branch}" "${staging_directory}" "${target_sha}"
 }
 
 validate_fast_forward() {
@@ -186,6 +218,7 @@ prepare_sources() {
     local runtime_ref="$2"
     local semantic_url="$3"
     local semantic_ref="$4"
+    local runtime_required_commit="$5"
     local runtime_directory="${SOURCES_DIR}/session-agent-runtime"
     local semantic_directory="${SOURCES_DIR}/java-code-intelligence"
     local runtime_staging
@@ -197,6 +230,7 @@ prepare_sources() {
 
     validate_requested_source "Session Agent Runtime" "${runtime_url}" "${runtime_ref}"
     validate_requested_source "Semantic" "${semantic_url}" "${semantic_ref}"
+    [[ -n "${runtime_required_commit}" ]] || fail "Session Agent Runtime required commit is blank"
     runtime_existing_sha="$(existing_source_sha "Session Agent Runtime" "${runtime_url}" "${runtime_ref}" "${runtime_directory}")"
     semantic_existing_sha="$(existing_source_sha "Semantic" "${semantic_url}" "${semantic_ref}" "${semantic_directory}")"
     runtime_target_sha="$(remote_branch_sha "Session Agent Runtime" "${runtime_url}" "${runtime_ref}")"
@@ -211,6 +245,13 @@ prepare_sources() {
         "${runtime_staging}" "${runtime_target_sha}"
     stage_source_at_target "Semantic" "${semantic_url}" "${semantic_ref}" \
         "${semantic_staging}" "${semantic_target_sha}"
+    validate_runtime_required_commit "${runtime_staging}" "${runtime_target_sha}" "${runtime_required_commit}"
+    DEPLOYMENT_RUNTIME_URL="${runtime_url}"
+    DEPLOYMENT_RUNTIME_REF="${runtime_ref}"
+    DEPLOYMENT_RUNTIME_TARGET_SHA="${runtime_target_sha}"
+    DEPLOYMENT_SEMANTIC_URL="${semantic_url}"
+    DEPLOYMENT_SEMANTIC_REF="${semantic_ref}"
+    DEPLOYMENT_SEMANTIC_TARGET_SHA="${semantic_target_sha}"
     validate_fast_forward "Session Agent Runtime" "${runtime_existing_sha}" "${runtime_staging}" "${runtime_target_sha}"
     validate_fast_forward "Semantic" "${semantic_existing_sha}" "${semantic_staging}" "${semantic_target_sha}"
 
@@ -219,6 +260,15 @@ prepare_sources() {
     promote_staged_source "Semantic" "${semantic_directory}" "${semantic_staging}" \
         "${semantic_ref}" "${semantic_target_sha}"
     cleanup_temporary_files
+}
+
+validate_deployment_sources() {
+    [[ -n "${DEPLOYMENT_RUNTIME_TARGET_SHA}" ]] || fail "Runtime staged target SHA is unavailable"
+    [[ -n "${DEPLOYMENT_SEMANTIC_TARGET_SHA}" ]] || fail "Semantic staged target SHA is unavailable"
+    validate_source_at_target "Session Agent Runtime" "${DEPLOYMENT_RUNTIME_URL}" "${DEPLOYMENT_RUNTIME_REF}" \
+        "${SOURCES_DIR}/session-agent-runtime" "${DEPLOYMENT_RUNTIME_TARGET_SHA}"
+    validate_source_at_target "Semantic" "${DEPLOYMENT_SEMANTIC_URL}" "${DEPLOYMENT_SEMANTIC_REF}" \
+        "${SOURCES_DIR}/java-code-intelligence" "${DEPLOYMENT_SEMANTIC_TARGET_SHA}"
 }
 
 prepare_host_paths() {
@@ -234,21 +284,17 @@ clear_deployment_record() {
 }
 
 write_deployment_record() {
-    local runtime_sha
-    local semantic_sha
-
-    runtime_sha="$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)" \
-        || fail "Runtime source HEAD could not be resolved for the deployment record"
-    semantic_sha="$(git -C "${SOURCES_DIR}/java-code-intelligence" rev-parse HEAD)" \
-        || fail "Semantic source HEAD could not be resolved for the deployment record"
+    [[ -n "${DEPLOYMENT_RUNTIME_TARGET_SHA}" ]] || fail "Runtime staged target SHA is unavailable for the deployment record"
+    [[ -n "${DEPLOYMENT_SEMANTIC_TARGET_SHA}" ]] || fail "Semantic staged target SHA is unavailable for the deployment record"
+    validate_deployment_sources
     DEPLOYMENT_RECORD_TEMP_FILE="$(mktemp "${DEPLOYMENT_RECORD_FILE}.tmp.XXXXXX")" \
         || fail "deployment record temporary file could not be created"
     chmod 0600 "${DEPLOYMENT_RECORD_TEMP_FILE}" \
         || fail "deployment record temporary file permissions could not be set"
     {
         printf 'deployment timestamp: %s\n' "$(date --iso-8601=seconds)"
-        printf 'Session Agent source SHA: %s\n' "${runtime_sha}"
-        printf 'Semantic source SHA: %s\n' "${semantic_sha}"
+        printf 'Session Agent source SHA: %s\n' "${DEPLOYMENT_RUNTIME_TARGET_SHA}"
+        printf 'Semantic source SHA: %s\n' "${DEPLOYMENT_SEMANTIC_TARGET_SHA}"
     } > "${DEPLOYMENT_RECORD_TEMP_FILE}" || fail "deployment record could not be written"
     mv -f "${DEPLOYMENT_RECORD_TEMP_FILE}" "${DEPLOYMENT_RECORD_FILE}" \
         || fail "deployment record could not be finalized"
@@ -284,9 +330,11 @@ main() {
     export STARTER_ROOT="${ROOT}"
     compose=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
     prepare_host_paths
-    prepare_sources "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}"
+    prepare_sources "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}" "${REQUIRED_RUNTIME_COMMIT}"
 
+    validate_deployment_sources
     "${compose[@]}" build semantic-service session-agent-runtime || fail "image build failed"
+    validate_deployment_sources
     clear_deployment_record || fail "deployment record could not be cleared"
     "${compose[@]}" down --remove-orphans --volumes || fail "existing stack could not be removed"
     "${compose[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres \
@@ -298,6 +346,7 @@ main() {
     "${compose[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime \
         || fail "Runtime did not become ready"
     "${compose[@]}" --profile runtime-check run --rm runtime-probe || fail "Runtime probe failed"
+    validate_deployment_sources
     write_deployment_record
     printf 'deploy: Session Agent UAT stack started; see %s\n' "${DEPLOYMENT_RECORD_FILE}"
 }
