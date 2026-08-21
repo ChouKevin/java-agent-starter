@@ -79,8 +79,8 @@ services:
         cp -a /fixture-source/order-service/. /fixtures/order-service/ &&
         chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service
     volumes:
-      - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/payment-service:/fixture-source/payment-service:ro
-      - ${STARTER_ROOT}/.runtime/sources/session-agent-runtime/fixtures/order-service:/fixture-source/order-service:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/payment-service:/fixture-source/payment-service:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/order-service:/fixture-source/order-service:ro
       - payment-service-fixture:/fixtures/payment-service
       - order-service-fixture:/fixtures/order-service
     restart: "no"

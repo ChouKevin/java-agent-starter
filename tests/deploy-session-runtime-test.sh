@@ -106,6 +106,15 @@ for repository in "${runtime_repository}" "${semantic_repository}"; do
     git -C "${seed_directory}" branch -M main
     git -C "${seed_directory}" push --quiet origin main
 done
+semantic_seed_directory="${semantic_repository%.git}-seed"
+mkdir -p "${semantic_seed_directory}/fixtures/uat/payment-service/src/main/java" \
+    "${semantic_seed_directory}/fixtures/uat/order-service/src/main/java"
+touch "${semantic_seed_directory}/fixtures/uat/payment-service/pom.xml"
+touch "${semantic_seed_directory}/fixtures/uat/payment-service/src/main/java/PaymentFixture.java" \
+    "${semantic_seed_directory}/fixtures/uat/order-service/src/main/java/OrderFixture.java"
+git -C "${semantic_seed_directory}" add fixtures
+git -C "${semantic_seed_directory}" commit --quiet -m 'add incomplete UAT fixtures'
+git -C "${semantic_seed_directory}" push --quiet origin main
 mkdir -p "${managed_sources}"
 git clone --quiet --branch main "${runtime_repository}" "${managed_sources}/session-agent-runtime"
 git clone --quiet --branch main "${semantic_repository}" "${managed_sources}/java-code-intelligence"
@@ -123,6 +132,40 @@ validate_deployment_sources() {
     printf 'sources-validated\n' >> "${call_log}"
     real_validate_deployment_sources
 }
+: > "${call_log}"
+eval "exec ${DEPLOY_LOCK_FD}>&-"
+mutate_source_during_build=0
+set +e
+(set -e; main) > "${temporary_directory}/missing-fixture.log" 2>&1
+failure_status=$?
+set -e
+[[ "${failure_status}" -ne 0 ]] || {
+    printf 'deployment accepted a Semantic checkout without the order-service fixture POM\n' >&2
+    exit 1
+}
+missing_fixture_error="$(<"${temporary_directory}/missing-fixture.log")"
+[[ "${missing_fixture_error}" == 'deploy: Semantic UAT fixture is missing: order-service' ]] || {
+    printf 'missing Semantic fixture failed with the wrong diagnostic: %s\n' "${missing_fixture_error}" >&2
+    exit 1
+}
+actual="$(<"${call_log}")"
+expected_missing_fixture=$'sources:git@github.com:ChouKevin/session-agent-runtime.git:main:git@github.com:ChouKevin/java-code-intelligence.git:uat:a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee\nsources-validated'
+[[ "${actual}" == "${expected_missing_fixture}" ]] || {
+    printf 'missing Semantic fixture did not abort immediately after source validation\nactual:\n%s\n' "${actual}" >&2
+    exit 1
+}
+if rg -n '^(compose:build|record-clear|compose:down|compose:.*fixture-init|compose:.*semantic-service|compose:.*session-agent-runtime|record)$' "${call_log}" >/dev/null; then
+    printf 'missing Semantic fixture triggered deployment side effects\nactual:\n%s\n' "${actual}" >&2
+    exit 1
+fi
+touch "${SOURCES_DIR}/java-code-intelligence/fixtures/uat/order-service/pom.xml"
+git -C "${SOURCES_DIR}/java-code-intelligence" config user.email deploy-session-runtime-test@example.invalid
+git -C "${SOURCES_DIR}/java-code-intelligence" config user.name deploy-session-runtime-test
+git -C "${SOURCES_DIR}/java-code-intelligence" add fixtures/uat/order-service/pom.xml
+git -C "${SOURCES_DIR}/java-code-intelligence" commit --quiet -m 'complete UAT fixtures'
+: > "${call_log}"
+eval "exec ${DEPLOY_LOCK_FD}>&-"
+mutate_source_during_build=1
 set +e
 (set -e; main) > "${temporary_directory}/source-mutation.log" 2>&1
 failure_status=$?

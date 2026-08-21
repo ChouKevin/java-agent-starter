@@ -42,6 +42,11 @@ done
 
 grep -Fq '${STARTER_ROOT}/.runtime/sources/session-agent-runtime' "${ROOT}/compose.yaml"
 grep -Fq '${STARTER_ROOT}/.runtime/sources/java-code-intelligence' "${ROOT}/compose.yaml"
+for expected_fixture_mount in \
+    '      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/payment-service:/fixture-source/payment-service:ro' \
+    '      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/order-service:/fixture-source/order-service:ro'; do
+    grep -Fxq "${expected_fixture_mount}" "${ROOT}/compose.yaml"
+done
 grep -Fq 'Session Agent source SHA:' "${ROOT}/deploy.sh"
 grep -Fq 'a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee' "${ROOT}/deploy.sh"
 grep -Fxq '    payment-service:' "${ROOT}/config/semantic-repositories.yml"
@@ -57,6 +62,12 @@ fi
 
 if rg -n 'prompt' "${ROOT}/compose.yaml" >/dev/null; then
     printf 'agent-owned prompt mount remains\n' >&2
+    exit 1
+fi
+
+if rg -n --glob '!starter-contract-test.sh' 'session-agent-runtime/fixtures' \
+    "${ROOT}/compose.yaml" "${ROOT}/deploy.sh" "${ROOT}/tests" >/dev/null; then
+    printf 'Runtime-owned UAT fixture path remains\n' >&2
     exit 1
 fi
 

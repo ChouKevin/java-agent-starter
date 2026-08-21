@@ -263,12 +263,20 @@ prepare_sources() {
 }
 
 validate_deployment_sources() {
+    local fixture_id
+    local fixture_directory
+
     [[ -n "${DEPLOYMENT_RUNTIME_TARGET_SHA}" ]] || fail "Runtime staged target SHA is unavailable"
     [[ -n "${DEPLOYMENT_SEMANTIC_TARGET_SHA}" ]] || fail "Semantic staged target SHA is unavailable"
     validate_source_at_target "Session Agent Runtime" "${DEPLOYMENT_RUNTIME_URL}" "${DEPLOYMENT_RUNTIME_REF}" \
         "${SOURCES_DIR}/session-agent-runtime" "${DEPLOYMENT_RUNTIME_TARGET_SHA}"
     validate_source_at_target "Semantic" "${DEPLOYMENT_SEMANTIC_URL}" "${DEPLOYMENT_SEMANTIC_REF}" \
         "${SOURCES_DIR}/java-code-intelligence" "${DEPLOYMENT_SEMANTIC_TARGET_SHA}"
+    for fixture_id in payment-service order-service; do
+        fixture_directory="${SOURCES_DIR}/java-code-intelligence/fixtures/uat/${fixture_id}"
+        [[ -f "${fixture_directory}/pom.xml" ]] || fail "Semantic UAT fixture is missing: ${fixture_id}"
+        [[ -d "${fixture_directory}/src/main/java" ]] || fail "Semantic UAT fixture source is missing: ${fixture_id}"
+    done
 }
 
 prepare_host_paths() {

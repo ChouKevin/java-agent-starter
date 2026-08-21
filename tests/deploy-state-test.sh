@@ -188,6 +188,16 @@ assert_equals "${semantic_before}" "$(git -C "${non_ff_sources}/java-code-intell
 
 seed_repository runtime-unchanged
 seed_repository semantic-unchanged
+semantic_unchanged_seed="${temporary_directory}/semantic-unchanged-seed"
+mkdir -p "${semantic_unchanged_seed}/fixtures/uat/payment-service/src/main/java" \
+    "${semantic_unchanged_seed}/fixtures/uat/order-service/src/main/java"
+touch "${semantic_unchanged_seed}/fixtures/uat/payment-service/pom.xml" \
+    "${semantic_unchanged_seed}/fixtures/uat/order-service/pom.xml" \
+    "${semantic_unchanged_seed}/fixtures/uat/payment-service/src/main/java/PaymentFixture.java" \
+    "${semantic_unchanged_seed}/fixtures/uat/order-service/src/main/java/OrderFixture.java"
+git -C "${semantic_unchanged_seed}" add fixtures
+git -C "${semantic_unchanged_seed}" commit --quiet -m 'add UAT fixtures'
+git -C "${semantic_unchanged_seed}" push --quiet origin main
 unchanged_sources="${temporary_directory}/unchanged-sources"
 mkdir -p "${unchanged_sources}"
 git clone --quiet --branch main "${temporary_directory}/runtime-unchanged.git" "${unchanged_sources}/session-agent-runtime"
