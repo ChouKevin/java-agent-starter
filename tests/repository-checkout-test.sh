@@ -8,6 +8,7 @@ printf 'SEMANTIC_QUERY_API_TOKEN=read-token\nSEMANTIC_HOST_PORT=18080\nSEMANTIC_
 source "${ROOT}/repository.sh"
 ENV_FILE="${TEMPORARY_DIRECTORY}/.env"
 CALL_LOG="${TEMPORARY_DIRECTORY}/calls.log"
+DEPLOY_LOCK_FILE="${TEMPORARY_DIRECTORY}/deploy.lock"
 pointer='{"revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","generationId":"g-current","manifestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","committedJobId":"job-current","publishedAt":"2026-08-22T00:00:00Z"}'
 curl() {
     CURL_ARGUMENTS=("$@")
@@ -21,6 +22,28 @@ curl() {
 
 main list
 [[ "${CURL_ARGUMENTS[*]}" == *'X-Api-Token: read-token'* && "${CURL_ARGUMENTS[*]}" == *'127.0.0.1:18080/v1/repositories'* ]]
+
+mkfifo "${TEMPORARY_DIRECTORY}/lock-release"
+(
+    exec 9>"${DEPLOY_LOCK_FILE}"
+    flock -n 9
+    touch "${TEMPORARY_DIRECTORY}/lock-ready"
+    read -r _ < "${TEMPORARY_DIRECTORY}/lock-release"
+) &
+LOCK_HOLDER_PID=$!
+while [[ ! -e "${TEMPORARY_DIRECTORY}/lock-ready" ]]; do sleep 0.01; done
+if (main checkout payment-service 0123456789abcdef0123456789abcdef01234567); then
+    printf 'repository mutation bypassed the deployment lock\n' >&2
+    printf '\n' > "${TEMPORARY_DIRECTORY}/lock-release"
+    exit 1
+fi
+printf '\n' > "${TEMPORARY_DIRECTORY}/lock-release"
+wait "${LOCK_HOLDER_PID}"
+
+exec {PARENT_DEPLOY_LOCK_FD}>"${DEPLOY_LOCK_FILE}"
+flock -n "${PARENT_DEPLOY_LOCK_FD}"
+STARTER_DEPLOY_LOCK_FD="${PARENT_DEPLOY_LOCK_FD}"
+export STARTER_DEPLOY_LOCK_FD
 main checkout payment-service 0123456789abcdef0123456789abcdef01234567
 [[ "${CURL_ARGUMENTS[*]}" == *'X-Api-Token: index-token'* && "${CURL_ARGUMENTS[*]}" == *'127.0.0.1:18081/index/repositories/payment-service/checkout'* ]]
 main rebuild payment-service

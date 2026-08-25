@@ -10,6 +10,8 @@ grep -Fq 'merge-base --is-ancestor "${required_commit}" "${target}"' "${ROOT}/de
 grep -Fq 'status --porcelain' "${ROOT}/deploy.sh"
 grep -Fq 'RESET WILL DELETE ALL NAMED VOLUMES' "${ROOT}/deploy.sh"
 grep -Fq 'acquire_deploy_lock' "${ROOT}/deploy.sh"
+grep -Fq 'export STARTER_DEPLOY_LOCK_FD' "${ROOT}/deploy.sh"
+grep -Fq 'acquire_indexer_admin_lock' "${ROOT}/repository.sh"
 main_block="$(awk '/main\(\)/,/^}/' "${ROOT}/deploy.sh")"
 grep -Fq 'command -v flock' <<< "${main_block}"
 lock_line="$(grep -n 'acquire_deploy_lock' <<< "${main_block}" | cut -d: -f1)"

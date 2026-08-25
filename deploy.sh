@@ -18,6 +18,7 @@ COMPOSE=()
 LEGACY_CONTAINER_ID=""
 QUERY_BACKUP_IMAGE="java-agent-semantic-query:pre-deploy"
 QUERY_BACKUP_CAPTURED=false
+DEPLOY_LOCK_FILE="${ROOT}/.runtime/deploy.lock"
 
 fail() { printf 'deploy: %s\n' "$*" >&2; exit 1; }
 
@@ -35,11 +36,11 @@ env_or_default() {
 }
 
 acquire_deploy_lock() {
-    local lock_file="${ROOT}/.runtime/deploy.lock"
-
     mkdir -p "${ROOT}/.runtime"
-    exec {DEPLOY_LOCK_FD}>"${lock_file}"
-    flock -n "${DEPLOY_LOCK_FD}" || fail "another starter deployment holds ${lock_file}"
+    exec {DEPLOY_LOCK_FD}>"${DEPLOY_LOCK_FILE}"
+    flock -n "${DEPLOY_LOCK_FD}" || fail "another starter deployment holds ${DEPLOY_LOCK_FILE}"
+    STARTER_DEPLOY_LOCK_FD="${DEPLOY_LOCK_FD}"
+    export STARTER_DEPLOY_LOCK_FD
 }
 
 create_env_if_missing() {
