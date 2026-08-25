@@ -1,364 +1,362 @@
 #!/usr/bin/env bash
-# Clone, build, and start the UAT stack from one repository.
+# Deploy the offline Semantic Indexer, Query, and Session Runtime without implicit data loss.
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ENV_FILE="${ROOT}/.env"
 SOURCES_DIR="${ROOT}/.runtime/sources"
 STARTUP_WAIT_SECONDS=240
+REQUIRED_RUNTIME_COMMIT='1e273dd41c0592a6a7abd6f9def0160caf9b7561'
 DEPLOYMENT_RECORD_FILE="${ROOT}/deployment-record.txt"
-REQUIRED_RUNTIME_COMMIT='a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee'
-INVOCATION_STAGING_ROOT=""
-DEPLOYMENT_RECORD_TEMP_FILE=""
 DEPLOYMENT_RUNTIME_URL=""
 DEPLOYMENT_RUNTIME_REF=""
 DEPLOYMENT_RUNTIME_TARGET_SHA=""
 DEPLOYMENT_SEMANTIC_URL=""
 DEPLOYMENT_SEMANTIC_REF=""
 DEPLOYMENT_SEMANTIC_TARGET_SHA=""
+COMPOSE=()
+LEGACY_CONTAINER_ID=""
 
-cleanup_temporary_files() {
-    if [[ -n "${INVOCATION_STAGING_ROOT}" ]]; then
-        rm -rf -- "${INVOCATION_STAGING_ROOT}"
-        INVOCATION_STAGING_ROOT=""
-    fi
-    if [[ -n "${DEPLOYMENT_RECORD_TEMP_FILE}" ]]; then
-        rm -f -- "${DEPLOYMENT_RECORD_TEMP_FILE}"
-        DEPLOYMENT_RECORD_TEMP_FILE=""
-    fi
-}
-
-fail() {
-    cleanup_temporary_files
-    printf 'deploy: %s\n' "$*" >&2
-    exit 1
-}
+fail() { printf 'deploy: %s\n' "$*" >&2; exit 1; }
 
 env_value() {
     local key="$1"
     local line
-
     line="$(grep -m1 -E "^${key}=" "${ENV_FILE}" 2>/dev/null || true)"
     printf '%s' "${line#*=}"
 }
 
-create_env_if_missing() {
-    local semantic_token
-    local postgres_password
+env_or_default() {
+    local configured
+    configured="$(env_value "$1")"
+    [[ -n "${configured}" ]] && printf '%s' "${configured}" || printf '%s' "$2"
+}
 
-    if [[ -e "${ENV_FILE}" ]]; then
-        [[ -s "${ENV_FILE}" ]] || fail "${ENV_FILE} exists but is empty"
-        return
-    fi
+create_env_if_missing() {
+    local semantic_token indexer_token postgres_password root_password bootstrap_password indexer_password query_password
+    [[ ! -e "${ENV_FILE}" ]] || { [[ -s "${ENV_FILE}" ]] || fail "${ENV_FILE} exists but is empty"; return; }
     semantic_token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    indexer_token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
     postgres_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
-    sed \
-        -e "s/^SEMANTIC_API_TOKEN=$/SEMANTIC_API_TOKEN=${semantic_token}/" \
+    root_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    bootstrap_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    indexer_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    query_password="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    sed -e "s/^SEMANTIC_QUERY_API_TOKEN=$/SEMANTIC_QUERY_API_TOKEN=${semantic_token}/" \
+        -e "s/^SEMANTIC_INDEXER_ADMIN_TOKEN=$/SEMANTIC_INDEXER_ADMIN_TOKEN=${indexer_token}/" \
         -e "s/^SESSION_AGENT_POSTGRES_PASSWORD=$/SESSION_AGENT_POSTGRES_PASSWORD=${postgres_password}/" \
+        -e "s/^SEMANTIC_MONGO_ROOT_PASSWORD=$/SEMANTIC_MONGO_ROOT_PASSWORD=${root_password}/" \
+        -e "s/^SEMANTIC_MONGO_BOOTSTRAP_PASSWORD=$/SEMANTIC_MONGO_BOOTSTRAP_PASSWORD=${bootstrap_password}/" \
+        -e "s/^SEMANTIC_MONGO_INDEXER_PASSWORD=$/SEMANTIC_MONGO_INDEXER_PASSWORD=${indexer_password}/" \
+        -e "s/^SEMANTIC_MONGO_QUERY_PASSWORD=$/SEMANTIC_MONGO_QUERY_PASSWORD=${query_password}/" \
         "${ROOT}/.env.example" > "${ENV_FILE}"
     chmod 0600 "${ENV_FILE}"
-    printf 'deploy: generated %s with local Semantic and PostgreSQL secrets\n' "${ENV_FILE}"
+    printf 'deploy: generated %s with local deployment secrets\n' "${ENV_FILE}"
 }
 
-env_or_default() {
-    local key="$1"
-    local default_value="$2"
-    local configured
-
-    configured="$(env_value "${key}")"
-    if [[ -n "${configured}" ]]; then
-        printf '%s' "${configured}"
-    else
-        printf '%s' "${default_value}"
-    fi
-}
-
-acquire_deploy_lock() {
-    local lock_file="${ROOT}/.runtime/deploy.lock"
-
-    mkdir -p "${ROOT}/.runtime"
-    exec {DEPLOY_LOCK_FD}>"${lock_file}"
-    flock -n "${DEPLOY_LOCK_FD}" || fail "another starter deployment holds ${lock_file}"
-}
-
-validate_requested_source() {
-    local label="$1"
-    local url="$2"
-    local branch="$3"
-
-    [[ -n "${url}" ]] || fail "${label} repository URL is blank"
-    [[ -n "${branch}" ]] || fail "${label} repository ref is blank"
+assert_required_secrets() {
+    local key
+    for key in SEMANTIC_QUERY_API_TOKEN SEMANTIC_INDEXER_ADMIN_TOKEN GOOGLE_API_KEY SESSION_AGENT_POSTGRES_PASSWORD \
+        SEMANTIC_MONGO_ROOT_PASSWORD SEMANTIC_MONGO_BOOTSTRAP_PASSWORD SEMANTIC_MONGO_INDEXER_PASSWORD SEMANTIC_MONGO_QUERY_PASSWORD; do
+        [[ -n "$(env_value "${key}")" ]] || fail "${key} is blank in ${ENV_FILE}"
+    done
 }
 
 remote_branch_sha() {
-    local label="$1"
-    local url="$2"
-    local branch="$3"
+    local url="$1"
+    local branch="$2"
     local result
-
-    result="$(git ls-remote --heads "${url}" "refs/heads/${branch}")" \
-        || fail "${label} remote branch could not be resolved: ${branch}"
-    [[ "${result}" =~ ^[0-9a-f]{40}[[:space:]]refs/heads/ ]] \
-        || fail "${label} remote branch is missing or ambiguous: ${branch}"
+    result="$(git ls-remote --heads "${url}" "refs/heads/${branch}")" || fail "remote branch could not be resolved: ${branch}"
+    [[ "${result}" =~ ^[0-9a-f]{40}[[:space:]]refs/heads/ ]] || fail "remote branch is missing or ambiguous: ${branch}"
     printf '%s' "${result%%[[:space:]]*}"
 }
 
-validate_source_checkout() {
-    local label="$1"
-    local url="$2"
-    local branch="$3"
-    local directory="$4"
-    local actual
-
-    [[ -d "${directory}/.git" ]] || fail "${label} source is not a Git checkout: ${directory}"
-
-    actual="$(git -C "${directory}" remote get-url origin)" \
-        || fail "${label} source has no origin remote: ${directory}"
-    [[ "${actual}" == "${url}" ]] \
-        || fail "${label} origin mismatch: expected ${url}, found ${actual}"
-    actual="$(git -C "${directory}" symbolic-ref --quiet --short HEAD || true)"
-    [[ "${actual}" == "${branch}" ]] \
-        || fail "${label} branch mismatch: expected ${branch}, found ${actual:-detached HEAD}"
-    [[ -z "$(git -C "${directory}" status --porcelain)" ]] \
-        || fail "${label} source has local changes: ${directory}"
-}
-
-validate_source_at_target() {
-    local label="$1"
-    local url="$2"
-    local branch="$3"
-    local directory="$4"
-    local target_sha="$5"
-    local actual_sha
-
-    validate_source_checkout "${label}" "${url}" "${branch}" "${directory}"
-    actual_sha="$(git -C "${directory}" rev-parse HEAD)" \
-        || fail "${label} source HEAD could not be resolved"
-    [[ "${actual_sha}" == "${target_sha}" ]] \
-        || fail "${label} source changed from the staged target"
-}
-
-validate_runtime_required_commit() {
-    local staging_directory="$1"
-    local target_sha="$2"
-    local required_commit="$3"
-
-    git -C "${staging_directory}" merge-base --is-ancestor "${required_commit}" "${target_sha}" \
-        || fail "Session Agent Runtime target ${target_sha} does not contain required compatible commit ${required_commit}"
-}
-
-existing_source_sha() {
-    local label="$1"
-    local url="$2"
-    local branch="$3"
-    local directory="$4"
-
-    if [[ -e "${directory}" ]]; then
-        validate_source_checkout "${label}" "${url}" "${branch}" "${directory}"
-        git -C "${directory}" rev-parse HEAD || fail "${label} source HEAD could not be resolved"
-    else
-        printf 'ABSENT'
+stage_branch_source() {
+    local label="$1" url="$2" branch="$3" required_commit="${4:-}"
+    local target staging actual
+    target="$(remote_branch_sha "${url}" "${branch}")"
+    staging="$(mktemp -d "${SOURCES_DIR}/.staging.XXXXXX")/${label}"
+    git clone --branch "${branch}" --single-branch "${url}" "${staging}" || fail "${label} source could not be staged"
+    actual="$(git -C "${staging}" rev-parse HEAD)"
+    [[ "${actual}" == "${target}" ]] || fail "${label} changed while being staged"
+    if [[ -n "${required_commit}" ]]; then
+        git -C "${staging}" merge-base --is-ancestor "${required_commit}" "${target}" \
+            || fail "Session Agent Runtime target ${target} does not contain required compatible commit ${required_commit}"
     fi
+    printf '%s' "${staging}"
 }
 
-stage_source_at_target() {
-    local label="$1"
-    local url="$2"
-    local branch="$3"
-    local staging_directory="$4"
-    local target_sha="$5"
-
-    git clone --branch "${branch}" --single-branch "${url}" "${staging_directory}" \
-        || fail "${label} target could not be staged"
-    validate_source_checkout "${label}" "${url}" "${branch}" "${staging_directory}"
-    [[ "$(git -C "${staging_directory}" rev-parse "origin/${branch}")" == "${target_sha}" ]] \
-        || fail "${label} remote branch changed during validation: ${branch}"
-    git -C "${staging_directory}" reset --hard "${target_sha}" >/dev/null \
-        || fail "${label} staged target could not be checked out"
-    validate_source_at_target "${label}" "${url}" "${branch}" "${staging_directory}" "${target_sha}"
-}
-
-validate_fast_forward() {
-    local label="$1"
-    local existing_sha="$2"
-    local staging_directory="$3"
-    local target_sha="$4"
-
-    if [[ "${existing_sha}" != 'ABSENT' ]]; then
-        git -C "${staging_directory}" merge-base --is-ancestor "${existing_sha}" "${target_sha}" \
+validate_staged_source() {
+    local label="$1" url="$2" branch="$3" destination="$4" staging="$5"
+    local existing_sha origin existing_branch target
+    target="$(git -C "${staging}" rev-parse HEAD)"
+    if [[ -e "${destination}" ]]; then
+        [[ -d "${destination}/.git" ]] || fail "${label} source is not a Git checkout: ${destination}"
+        origin="$(git -C "${destination}" remote get-url origin)" || fail "${label} source has no origin remote"
+        [[ "${origin}" == "${url}" ]] || fail "${label} origin mismatch: expected ${url}, found ${origin}"
+        existing_branch="$(git -C "${destination}" symbolic-ref --quiet --short HEAD || true)"
+        [[ "${existing_branch}" == "${branch}" ]] || fail "${label} branch mismatch: expected ${branch}"
+        [[ -z "$(git -C "${destination}" status --porcelain)" ]] || fail "${label} source has local changes: ${destination}"
+        existing_sha="$(git -C "${destination}" rev-parse HEAD)"
+        git -C "${staging}" merge-base --is-ancestor "${existing_sha}" "${target}" \
             || fail "${label} update is not fast-forward eligible"
     fi
 }
 
 promote_staged_source() {
-    local label="$1"
-    local directory="$2"
-    local staging_directory="$3"
-    local branch="$4"
-    local target_sha="$5"
-    local actual_sha
-
-    if [[ -e "${directory}" ]]; then
-        git -C "${directory}" fetch --no-tags "${staging_directory}" "refs/heads/${branch}" >/dev/null \
-            || fail "${label} staged target could not be promoted"
-        git -C "${directory}" merge --ff-only "${target_sha}" >/dev/null \
-            || fail "${label} staged target could not be fast-forwarded"
+    local destination="$1" staging="$2"
+    if [[ -e "${destination}" ]]; then
+        mv "${destination}" "${destination}.previous"
+        mv "${staging}" "${destination}"
+        rm -rf -- "${destination}.previous"
     else
-        mv "${staging_directory}" "${directory}" \
-            || fail "${label} staged target could not be promoted"
+        mv "${staging}" "${destination}"
     fi
-    actual_sha="$(git -C "${directory}" rev-parse HEAD)" \
-        || fail "${label} promoted source HEAD could not be resolved"
-    [[ "${actual_sha}" == "${target_sha}" ]] \
-        || fail "${label} source changed during promotion"
 }
 
 prepare_sources() {
-    local runtime_url="$1"
-    local runtime_ref="$2"
-    local semantic_url="$3"
-    local semantic_ref="$4"
-    local runtime_required_commit="$5"
-    local runtime_directory="${SOURCES_DIR}/session-agent-runtime"
-    local semantic_directory="${SOURCES_DIR}/java-code-intelligence"
-    local runtime_staging
-    local semantic_staging
-    local runtime_target_sha
-    local semantic_target_sha
-    local runtime_existing_sha
-    local semantic_existing_sha
-
-    validate_requested_source "Session Agent Runtime" "${runtime_url}" "${runtime_ref}"
-    validate_requested_source "Semantic" "${semantic_url}" "${semantic_ref}"
-    [[ -n "${runtime_required_commit}" ]] || fail "Session Agent Runtime required commit is blank"
-    runtime_existing_sha="$(existing_source_sha "Session Agent Runtime" "${runtime_url}" "${runtime_ref}" "${runtime_directory}")"
-    semantic_existing_sha="$(existing_source_sha "Semantic" "${semantic_url}" "${semantic_ref}" "${semantic_directory}")"
-    runtime_target_sha="$(remote_branch_sha "Session Agent Runtime" "${runtime_url}" "${runtime_ref}")"
-    semantic_target_sha="$(remote_branch_sha "Semantic" "${semantic_url}" "${semantic_ref}")"
-
-    mkdir -p "${SOURCES_DIR}" || fail "source staging directory could not be created"
-    INVOCATION_STAGING_ROOT="$(mktemp -d "${SOURCES_DIR}/.staging.XXXXXX")" \
-        || fail "source staging directory could not be created"
-    runtime_staging="${INVOCATION_STAGING_ROOT}/session-agent-runtime"
-    semantic_staging="${INVOCATION_STAGING_ROOT}/java-code-intelligence"
-    stage_source_at_target "Session Agent Runtime" "${runtime_url}" "${runtime_ref}" \
-        "${runtime_staging}" "${runtime_target_sha}"
-    stage_source_at_target "Semantic" "${semantic_url}" "${semantic_ref}" \
-        "${semantic_staging}" "${semantic_target_sha}"
-    validate_runtime_required_commit "${runtime_staging}" "${runtime_target_sha}" "${runtime_required_commit}"
+    local runtime_url="$1" runtime_ref="$2" semantic_url="$3" semantic_ref="$4" runtime_staging semantic_staging
+    mkdir -p "${SOURCES_DIR}"
+    runtime_staging="$(stage_branch_source session-agent-runtime "${runtime_url}" "${runtime_ref}" "${REQUIRED_RUNTIME_COMMIT}")" \
+        || fail "Session Agent Runtime source could not be staged"
+    semantic_staging="$(stage_branch_source java-code-intelligence "${semantic_url}" "${semantic_ref}")" \
+        || fail "Semantic source could not be staged"
+    validate_staged_source "Session Agent Runtime" "${runtime_url}" "${runtime_ref}" "${SOURCES_DIR}/session-agent-runtime" "${runtime_staging}"
+    validate_staged_source "Semantic" "${semantic_url}" "${semantic_ref}" "${SOURCES_DIR}/java-code-intelligence" "${semantic_staging}"
+    promote_staged_source "${SOURCES_DIR}/session-agent-runtime" "${runtime_staging}"
+    promote_staged_source "${SOURCES_DIR}/java-code-intelligence" "${semantic_staging}"
     DEPLOYMENT_RUNTIME_URL="${runtime_url}"
     DEPLOYMENT_RUNTIME_REF="${runtime_ref}"
-    DEPLOYMENT_RUNTIME_TARGET_SHA="${runtime_target_sha}"
+    DEPLOYMENT_RUNTIME_TARGET_SHA="$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)"
     DEPLOYMENT_SEMANTIC_URL="${semantic_url}"
     DEPLOYMENT_SEMANTIC_REF="${semantic_ref}"
-    DEPLOYMENT_SEMANTIC_TARGET_SHA="${semantic_target_sha}"
-    validate_fast_forward "Session Agent Runtime" "${runtime_existing_sha}" "${runtime_staging}" "${runtime_target_sha}"
-    validate_fast_forward "Semantic" "${semantic_existing_sha}" "${semantic_staging}" "${semantic_target_sha}"
+    DEPLOYMENT_SEMANTIC_TARGET_SHA="$(git -C "${SOURCES_DIR}/java-code-intelligence" rev-parse HEAD)"
+    local fixture
+    for fixture in payment-service order-service video-service; do
+        [[ -f "${SOURCES_DIR}/java-code-intelligence/fixtures/uat/${fixture}/pom.xml" ]] || fail "Semantic UAT fixture is missing: ${fixture}"
+    done
+}
 
-    promote_staged_source "Session Agent Runtime" "${runtime_directory}" "${runtime_staging}" \
-        "${runtime_ref}" "${runtime_target_sha}"
-    promote_staged_source "Semantic" "${semantic_directory}" "${semantic_staging}" \
-        "${semantic_ref}" "${semantic_target_sha}"
-    cleanup_temporary_files
+validate_source_at_target() {
+    local label="$1" url="$2" branch="$3" directory="$4" target="$5"
+    [[ "$(git -C "${directory}" remote get-url origin)" == "${url}" ]] || fail "${label} origin changed during deployment"
+    [[ "$(git -C "${directory}" symbolic-ref --quiet --short HEAD || true)" == "${branch}" ]] || fail "${label} branch changed during deployment"
+    [[ -z "$(git -C "${directory}" status --porcelain)" ]] || fail "${label} source changed during deployment"
+    [[ "$(git -C "${directory}" rev-parse HEAD)" == "${target}" ]] || fail "${label} source changed during deployment"
 }
 
 validate_deployment_sources() {
-    local fixture_id
-    local fixture_directory
-
-    [[ -n "${DEPLOYMENT_RUNTIME_TARGET_SHA}" ]] || fail "Runtime staged target SHA is unavailable"
-    [[ -n "${DEPLOYMENT_SEMANTIC_TARGET_SHA}" ]] || fail "Semantic staged target SHA is unavailable"
     validate_source_at_target "Session Agent Runtime" "${DEPLOYMENT_RUNTIME_URL}" "${DEPLOYMENT_RUNTIME_REF}" \
         "${SOURCES_DIR}/session-agent-runtime" "${DEPLOYMENT_RUNTIME_TARGET_SHA}"
     validate_source_at_target "Semantic" "${DEPLOYMENT_SEMANTIC_URL}" "${DEPLOYMENT_SEMANTIC_REF}" \
         "${SOURCES_DIR}/java-code-intelligence" "${DEPLOYMENT_SEMANTIC_TARGET_SHA}"
-    for fixture_id in payment-service order-service; do
-        fixture_directory="${SOURCES_DIR}/java-code-intelligence/fixtures/uat/${fixture_id}"
-        [[ -f "${fixture_directory}/pom.xml" ]] || fail "Semantic UAT fixture is missing: ${fixture_id}"
-        [[ -d "${fixture_directory}/src/main/java" ]] || fail "Semantic UAT fixture source is missing: ${fixture_id}"
-    done
-}
-
-prepare_host_paths() {
-    mkdir -p \
-        "${SOURCES_DIR}" \
-        "${ROOT}/data/repositories" \
-        "${ROOT}/data/jdtls-workspaces"
-    chmod 0644 "${ROOT}/config/semantic-repositories.yml"
-}
-
-clear_deployment_record() {
-    rm -f "$DEPLOYMENT_RECORD_FILE"
 }
 
 write_deployment_record() {
-    [[ -n "${DEPLOYMENT_RUNTIME_TARGET_SHA}" ]] || fail "Runtime staged target SHA is unavailable for the deployment record"
-    [[ -n "${DEPLOYMENT_SEMANTIC_TARGET_SHA}" ]] || fail "Semantic staged target SHA is unavailable for the deployment record"
+    local temporary_record
     validate_deployment_sources
-    DEPLOYMENT_RECORD_TEMP_FILE="$(mktemp "${DEPLOYMENT_RECORD_FILE}.tmp.XXXXXX")" \
-        || fail "deployment record temporary file could not be created"
-    chmod 0600 "${DEPLOYMENT_RECORD_TEMP_FILE}" \
-        || fail "deployment record temporary file permissions could not be set"
+    temporary_record="$(mktemp "${DEPLOYMENT_RECORD_FILE}.tmp.XXXXXX")" || fail "deployment record temporary file could not be created"
+    chmod 0600 "${temporary_record}"
     {
         printf 'deployment timestamp: %s\n' "$(date --iso-8601=seconds)"
         printf 'Session Agent source SHA: %s\n' "${DEPLOYMENT_RUNTIME_TARGET_SHA}"
         printf 'Semantic source SHA: %s\n' "${DEPLOYMENT_SEMANTIC_TARGET_SHA}"
-    } > "${DEPLOYMENT_RECORD_TEMP_FILE}" || fail "deployment record could not be written"
-    mv -f "${DEPLOYMENT_RECORD_TEMP_FILE}" "${DEPLOYMENT_RECORD_FILE}" \
-        || fail "deployment record could not be finalized"
-    DEPLOYMENT_RECORD_TEMP_FILE=""
+    } > "${temporary_record}"
+    mv -f "${temporary_record}" "${DEPLOYMENT_RECORD_FILE}"
+}
+
+configured_repositories() {
+    awk '/^    [a-z0-9][a-z0-9._-]*:$/ { value=$1; sub(/:$/, "", value); print value }' "${ROOT}/config/semantic-repositories.yml"
+}
+
+bootstrap_schema() {
+    "${COMPOSE[@]}" --profile schema-maintenance run --rm semantic-mongo-users || fail "Mongo user and role bootstrap failed"
+    "${COMPOSE[@]}" --profile schema-maintenance run --rm semantic-mongo-init || fail "versioned schema bootstrap failed"
+}
+
+poll_index_job() {
+    local repository="$1" job_id="$2" token="$3" port="$4"
+    local deadline response active phase failure
+    deadline=$((SECONDS + STARTUP_WAIT_SECONDS))
+    while (( SECONDS < deadline )); do
+        response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/index/repositories/${repository}/jobs/${job_id}")" \
+            || { printf 'deploy: Indexer job status is unavailable: %s\n' "${job_id}" >&2; return 1; }
+        active="$(jq -r '.active' <<< "${response}")"
+        phase="$(jq -r '.phase' <<< "${response}")"
+        failure="$(jq -r '.failureCategory // empty' <<< "${response}")"
+        [[ -z "${failure}" ]] || { printf 'deploy: Indexer job %s failed: %s\n' "${job_id}" "${failure}" >&2; return 1; }
+        if [[ "${active}" == false ]]; then
+            [[ "${phase}" == COMPLETE ]] || { printf 'deploy: Indexer job %s ended without a sealed publication: %s\n' "${job_id}" "${phase}" >&2; return 1; }
+            printf '%s' "${response}"
+            return
+        fi
+        sleep 2
+    done
+    printf 'deploy: Indexer job did not finish within %ss: %s\n' "${STARTUP_WAIT_SECONDS}" "${job_id}" >&2
+    return 1
+}
+
+ensure_all_repositories() {
+    local repository token port response job_id
+    token="$(env_value SEMANTIC_INDEXER_ADMIN_TOKEN)"
+    port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
+    while IFS= read -r repository; do
+        response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 -X POST \
+            -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/index/repositories/${repository}/ensure")" \
+            || fail "Indexer rejected ${repository}; run ./deploy.sh schema-rebuild for incompatible schemas"
+        job_id="$(jq -er '.jobId' <<< "${response}")" || fail "Indexer returned no job id for ${repository}"
+        poll_index_job "${repository}" "${job_id}" "${token}" "${port}" || fail "Indexer job did not complete: ${job_id}"
+    done < <(configured_repositories)
+}
+
+wait_for_compatible_manifests() {
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-query || fail "Query cannot start: schema-rebuild required"
+    "${COMPOSE[@]}" --profile semantic-query-check run --rm semantic-query-probe \
+        || fail "Query did not observe compatible sealed manifests; run ./deploy.sh schema-rebuild"
+}
+
+SCHEMA_REBUILD_POINTERS="${ROOT}/.runtime/schema-rebuild-pointers"
+
+record_current_pointers() {
+    local repository token port response pointer
+    token="$(env_value SEMANTIC_QUERY_API_TOKEN)"
+    port="$(env_or_default SEMANTIC_HOST_PORT 8080)"
+    rm -rf -- "${SCHEMA_REBUILD_POINTERS}"
+    mkdir -p "${SCHEMA_REBUILD_POINTERS}"
+    while IFS= read -r repository; do
+        response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/v1/repositories/${repository}")" \
+            || fail "could not record Query pointer for ${repository} before schema-rebuild"
+        pointer="$(jq -ce '{revision: .revision.value, generationId: .generationId.value, manifestDigest: .manifestDigest.value, committedJobId: .committedJobId.value, publishedAt: .publishedAt}' <<< "${response}")" \
+            || fail "Query returned an invalid publication pointer for ${repository}"
+        printf '%s\n' "${pointer}" > "${SCHEMA_REBUILD_POINTERS}/${repository}.previous.json"
+    done < <(configured_repositories)
+}
+
+rebuild_all_repositories() {
+    local repository token port response job_id status pointer
+    token="$(env_value SEMANTIC_INDEXER_ADMIN_TOKEN)"
+    port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
+    while IFS= read -r repository; do
+        response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 -X POST \
+            -H "X-Api-Token: ${token}" -H 'Content-Type: application/json' \
+            --data '{"authorizeIncompatibleSchema":true}' "http://127.0.0.1:${port}/index/repositories/${repository}/rebuild")" \
+            || return 1
+        job_id="$(jq -er '.jobId' <<< "${response}")" || return 1
+        status="$(poll_index_job "${repository}" "${job_id}" "${token}" "${port}")" || return 1
+        pointer="$(jq -ce '.currentPointer // error("missing published pointer")' <<< "${status}")" || return 1
+        printf '%s\n' "${pointer}" > "${SCHEMA_REBUILD_POINTERS}/${repository}.rebuilt.json"
+    done < <(configured_repositories)
+}
+
+rollback_rebuilt_repositories() {
+    local rebuilt token port repository request response job_id
+    token="$(env_value SEMANTIC_INDEXER_ADMIN_TOKEN)"
+    port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
+    shopt -s nullglob
+    for rebuilt in "${SCHEMA_REBUILD_POINTERS}"/*.rebuilt.json; do
+        repository="$(basename "${rebuilt}" .rebuilt.json)"
+        request="$(jq -n -ce --slurpfile current "${rebuilt}" --slurpfile rollback "${SCHEMA_REBUILD_POINTERS}/${repository}.previous.json" \
+            '{expectedCurrent: $current[0], expectedRollback: $rollback[0]}')" || return 1
+        response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 -X POST \
+            -H "X-Api-Token: ${token}" -H 'Content-Type: application/json' --data "${request}" \
+            "http://127.0.0.1:${port}/index/repositories/${repository}/rollback")" || return 1
+        job_id="$(jq -er '.jobId' <<< "${response}")" || return 1
+        poll_index_job "${repository}" "${job_id}" "${token}" "${port}" >/dev/null || return 1
+    done
+    shopt -u nullglob
+}
+
+prepare_legacy_cutover_image() {
+    local semantic_url="$1" legacy_ref="$2" legacy_directory="${ROOT}/.runtime/legacy-semantic"
+    rm -rf -- "${legacy_directory}"
+    git clone --no-checkout "${semantic_url}" "${legacy_directory}" || fail "legacy Semantic checkout failed"
+    git -C "${legacy_directory}" checkout --detach "${legacy_ref}" || fail "legacy Semantic ref could not be checked out"
+    [[ "$(git -C "${legacy_directory}" rev-parse HEAD)" == "${legacy_ref}" ]] || fail "legacy Semantic checkout is not the configured immutable SHA"
+    docker build --tag java-agent-semantic-legacy --file "${legacy_directory}/Dockerfile" "${legacy_directory}" || fail "legacy image build failed"
+}
+
+restart_legacy_on_query_failure() { "${COMPOSE[@]}" --profile legacy-cutover start semantic-service >/dev/null 2>&1 || true; }
+
+detect_legacy_cutover() {
+    LEGACY_CONTAINER_ID="$(docker ps --all --quiet --filter label=com.docker.compose.project=java-agent-uat \
+        --filter label=com.docker.compose.service=semantic-service | head -n 1)"
+}
+
+replace_legacy_after_query_ready() {
+    [[ -n "${LEGACY_CONTAINER_ID}" ]] || { wait_for_compatible_manifests; return; }
+    docker stop "${LEGACY_CONTAINER_ID}" >/dev/null || fail "could not stop the exact legacy Semantic container"
+    if ! wait_for_compatible_manifests; then
+        docker start "${LEGACY_CONTAINER_ID}" >/dev/null || restart_legacy_on_query_failure
+        fail "Query cutover failed; the exact legacy container was restored"
+    fi
+    docker rm "${LEGACY_CONTAINER_ID}" >/dev/null || fail "could not remove the successfully replaced legacy container"
+    LEGACY_CONTAINER_ID=""
+}
+
+normal_deploy() {
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres semantic-mongodb || fail "database startup failed"
+    "${COMPOSE[@]}" --profile setup run --rm fixture-init || fail "fixture initialization failed"
+    bootstrap_schema
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer startup failed"
+    ensure_all_repositories
+    replace_legacy_after_query_ready
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || fail "Runtime startup failed"
+    "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe || fail "Runtime probe failed"
+}
+
+schema_rebuild() {
+    record_current_pointers
+    "${COMPOSE[@]}" stop session-agent-runtime semantic-query || fail "could not quiesce Query and Runtime"
+    bootstrap_schema
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer startup failed"
+    if ! rebuild_all_repositories; then
+        rollback_rebuilt_repositories || fail "schema-rebuild failed and verified rollback could not complete"
+        fail "schema-rebuild failed; all rebuilt repository pointers were rolled back"
+    fi
+    replace_legacy_after_query_ready || { rollback_rebuilt_repositories; fail "schema-rebuild requires compatible sealed manifests"; }
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || { rollback_rebuilt_repositories; fail "Runtime failed after schema-rebuild"; }
+}
+
+reset_deploy() {
+    printf 'deploy: RESET WILL DELETE ALL NAMED VOLUMES.\n' >&2
+    "${COMPOSE[@]}" down --remove-orphans --volumes || fail "reset teardown failed"
+    normal_deploy
 }
 
 main() {
-    local runtime_url
-    local runtime_ref
-    local semantic_url
-    local semantic_ref
-    local token
-    local google_key
-    local -a compose
-
-    [[ "$#" -eq 0 ]] || fail "usage: ./deploy.sh"
-    command -v flock >/dev/null 2>&1 || fail "flock is required"
-    acquire_deploy_lock
+    local mode="${1:-normal}" runtime_url runtime_ref semantic_url semantic_ref
+    [[ "$#" -le 1 ]] || fail "usage: ./deploy.sh [schema-rebuild|reset]"
+    case "${mode}" in normal|schema-rebuild|reset) ;; *) fail "usage: ./deploy.sh [schema-rebuild|reset]" ;; esac
     command -v git >/dev/null 2>&1 || fail "git is required"
     command -v docker >/dev/null 2>&1 || fail "docker is required"
+    command -v jq >/dev/null 2>&1 || fail "jq is required"
     docker compose version >/dev/null 2>&1 || fail "docker compose is required"
     create_env_if_missing
-    token="$(env_value SEMANTIC_API_TOKEN)"
-    google_key="$(env_value GOOGLE_API_KEY)"
-    [[ -n "${token}" ]] || fail "SEMANTIC_API_TOKEN is blank in ${ENV_FILE}"
-    [[ -n "${google_key}" ]] || fail "GOOGLE_API_KEY is blank in ${ENV_FILE}"
-
+    assert_required_secrets
+    [[ "$(env_or_default SEMANTIC_DISPOSABLE_UAT false)" == true ]] \
+        || fail "this compose uses plaintext Mongo only for disposable UAT; use an external TLS Mongo deployment"
     runtime_url="$(env_or_default SESSION_AGENT_GIT_URL git@github.com:ChouKevin/session-agent-runtime.git)"
     runtime_ref="$(env_or_default SESSION_AGENT_GIT_REF main)"
     semantic_url="$(env_or_default SEMANTIC_GIT_URL git@github.com:ChouKevin/java-code-intelligence.git)"
     semantic_ref="$(env_or_default SEMANTIC_GIT_REF uat)"
-
     export STARTER_ROOT="${ROOT}"
-    compose=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
-    prepare_host_paths
-    prepare_sources "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}" "${REQUIRED_RUNTIME_COMMIT}"
-
+    COMPOSE=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
+    prepare_sources "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}"
+    detect_legacy_cutover
+    if [[ -n "${LEGACY_CONTAINER_ID}" ]]; then
+        prepare_legacy_cutover_image "${semantic_url}" "$(env_or_default SEMANTIC_LEGACY_REF 366f870c269df27a22ab26e4becdc08359573ff1)"
+    fi
+    "${COMPOSE[@]}" build semantic-mongo-init semantic-indexer semantic-query session-agent-runtime || fail "image build failed"
     validate_deployment_sources
-    "${compose[@]}" build semantic-service session-agent-runtime || fail "image build failed"
-    validate_deployment_sources
-    clear_deployment_record || fail "deployment record could not be cleared"
-    "${compose[@]}" down --remove-orphans --volumes || fail "existing stack could not be removed"
-    "${compose[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres \
-        || fail "PostgreSQL did not become ready"
-    "${compose[@]}" --profile setup run --rm fixture-init || fail "fixture initialization failed"
-    "${compose[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-service \
-        || fail "Semantic did not become ready"
-    "${compose[@]}" --profile semantic-check run --rm semantic-probe || fail "Semantic probe failed"
-    "${compose[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime \
-        || fail "Runtime did not become ready"
-    "${compose[@]}" --profile runtime-check run --rm runtime-probe || fail "Runtime probe failed"
-    validate_deployment_sources
+    case "${mode}" in
+        normal) normal_deploy ;;
+        schema-rebuild) schema_rebuild ;;
+        reset) reset_deploy ;;
+    esac
     write_deployment_record
-    printf 'deploy: Session Agent UAT stack started; see %s\n' "${DEPLOYMENT_RECORD_FILE}"
+    printf 'deploy: offline Semantic index services started\n'
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-    main "$@"
-fi
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

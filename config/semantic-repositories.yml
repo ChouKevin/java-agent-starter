@@ -8,3 +8,7 @@ semantic:
       mode: LOCAL_FIXTURE
       display-name: Order Service
       path: /fixtures/order-service
+    video-service:
+      mode: LOCAL_FIXTURE
+      display-name: Video Service
+      path: /fixtures/video-service

@@ -13,33 +13,125 @@ services:
       POSTGRES_DB: session_agent
       POSTGRES_USER: session_agent
       POSTGRES_PASSWORD: ${SESSION_AGENT_POSTGRES_PASSWORD:?required}
-    volumes:
-      - session-agent-postgres-data:/var/lib/postgresql/data
+    volumes: [session-agent-postgres-data:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U session_agent -d session_agent"]
     networks: [session-agent-network]
 
-  semantic-service:
+  semantic-mongodb:
     <<: *runtime-logging
+    image: mongo:8.0.4
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${SEMANTIC_MONGO_ROOT_USERNAME:-semantic_root}
+      MONGO_INITDB_ROOT_PASSWORD: ${SEMANTIC_MONGO_ROOT_PASSWORD:?required}
+      MONGO_INITDB_DATABASE: semantic
+      SEMANTIC_MONGO_BOOTSTRAP_PASSWORD: ${SEMANTIC_MONGO_BOOTSTRAP_PASSWORD:?required}
+      SEMANTIC_MONGO_INDEXER_PASSWORD: ${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}
+      SEMANTIC_MONGO_QUERY_PASSWORD: ${SEMANTIC_MONGO_QUERY_PASSWORD:?required}
+    command: ["mongod", "--auth", "--bind_ip_all"]
+    volumes:
+      - semantic-mongodb-data:/data/db
+      - ${STARTER_ROOT}/config/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'db.runCommand({ ping: 1 }).ok' | grep 1"]
+    networks: [semantic-read, semantic-admin]
+
+  semantic-mongo-init:
+    <<: *runtime-logging
+    image: java-agent-semantic-indexer
     build:
       context: ${STARTER_ROOT}/.runtime/sources/java-code-intelligence
+      dockerfile: Dockerfile.indexer
+    profiles: [setup, schema-maintenance]
+    depends_on:
+      semantic-mongodb:
+        condition: service_healthy
     environment:
-      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN:?required}
+      SEMANTIC_MONGODB_URI: mongodb://semantic_bootstrap:${SEMANTIC_MONGO_BOOTSTRAP_PASSWORD:?required}@semantic-mongodb:27017/semantic?authSource=semantic
+    command: ["--spring.main.web-application-type=none", "--semantic.schema-bootstrap=true"]
+    restart: "no"
+    networks: [semantic-admin]
+
+  semantic-mongo-users:
+    <<: *runtime-logging
+    image: mongo:8.0.4
+    profiles: [schema-maintenance]
+    depends_on:
+      semantic-mongodb:
+        condition: service_healthy
+    environment:
+      SEMANTIC_MONGO_ROOT_USERNAME: ${SEMANTIC_MONGO_ROOT_USERNAME:-semantic_root}
+      SEMANTIC_MONGO_ROOT_PASSWORD: ${SEMANTIC_MONGO_ROOT_PASSWORD:?required}
+      SEMANTIC_MONGO_BOOTSTRAP_PASSWORD: ${SEMANTIC_MONGO_BOOTSTRAP_PASSWORD:?required}
+      SEMANTIC_MONGO_INDEXER_PASSWORD: ${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}
+      SEMANTIC_MONGO_QUERY_PASSWORD: ${SEMANTIC_MONGO_QUERY_PASSWORD:?required}
+    entrypoint: ["mongosh", "--quiet", "--host", "semantic-mongodb", "--username", "$$SEMANTIC_MONGO_ROOT_USERNAME", "--password", "$$SEMANTIC_MONGO_ROOT_PASSWORD", "--authenticationDatabase", "admin", "--file", "/config/mongo-init.js"]
+    volumes:
+      - ${STARTER_ROOT}/config/mongo-init.js:/config/mongo-init.js:ro
+    restart: "no"
+    networks: [semantic-admin]
+
+  semantic-indexer:
+    <<: *runtime-logging
+    image: java-agent-semantic-indexer
+    build:
+      context: ${STARTER_ROOT}/.runtime/sources/java-code-intelligence
+      dockerfile: Dockerfile.indexer
+    depends_on:
+      semantic-mongodb:
+        condition: service_healthy
+    environment:
+      SEMANTIC_MONGODB_URI: mongodb://semantic_indexer:${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}@semantic-mongodb:27017/semantic?authSource=semantic
+      SEMANTIC_INDEXER_ADMIN_TOKEN: ${SEMANTIC_INDEXER_ADMIN_TOKEN:?required}
       GIT_USERNAME: ${GIT_USERNAME:-}
       GIT_TOKEN: ${GIT_TOKEN:-}
       JDTLS_MAX_ACTIVE_WORKSPACES: ${JDTLS_MAX_ACTIVE_WORKSPACES:-2}
       REPOSITORY_SYNTAX_CACHE_MAXIMUM_WEIGHT: ${REPOSITORY_SYNTAX_CACHE_MAXIMUM_WEIGHT:-120000}
       REPOSITORY_SYNTAX_CACHE_MAXIMUM_ENTRY_WEIGHT: ${REPOSITORY_SYNTAX_CACHE_MAXIMUM_ENTRY_WEIGHT:-60000}
       SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/semantic-repositories.yml
-    ports:
-      - "127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"
+    ports: ["127.0.0.1:${SEMANTIC_INDEXER_HOST_PORT:-8081}:8080"]
+    volumes:
+      - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
+      - payment-service-fixture:/fixtures/payment-service:ro
+      - order-service-fixture:/fixtures/order-service:ro
+      - video-service-fixture:/fixtures/video-service:ro
+      - semantic-indexer-repository-data:/data/repos
+      - semantic-indexer-jdt-data:/data/jdtls
+    networks: [semantic-admin]
+
+  semantic-query:
+    <<: *runtime-logging
+    image: java-agent-semantic-query
+    build:
+      context: ${STARTER_ROOT}/.runtime/sources/java-code-intelligence
+      dockerfile: Dockerfile.query
+    depends_on:
+      semantic-mongodb:
+        condition: service_healthy
+    environment:
+      SEMANTIC_MONGODB_URI: mongodb://semantic_query:${SEMANTIC_MONGO_QUERY_PASSWORD:?required}@semantic-mongodb:27017/semantic?authSource=semantic
+      SEMANTIC_QUERY_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
+    ports: ["127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"]
+    networks: [semantic-read]
+
+  semantic-service:
+    <<: *runtime-logging
+    image: ${SEMANTIC_LEGACY_IMAGE:-java-agent-semantic-legacy}
+    profiles: [legacy-cutover]
+    environment:
+      SEMANTIC_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
+      GIT_USERNAME: ${GIT_USERNAME:-}
+      GIT_TOKEN: ${GIT_TOKEN:-}
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/semantic-repositories.yml
+    ports: ["127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"]
     volumes:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
       - payment-service-fixture:/fixtures/payment-service
       - order-service-fixture:/fixtures/order-service
+      - video-service-fixture:/fixtures/video-service
       - semantic-repository-data:/data/repos
       - semantic-jdt-data:/data/jdtls
-    networks: [session-agent-network]
+    networks: [semantic-admin]
 
   session-agent-runtime:
     <<: *runtime-logging
@@ -48,14 +140,14 @@ services:
     depends_on:
       session-agent-postgres:
         condition: service_healthy
-      semantic-service:
+      semantic-query:
         condition: service_started
     environment:
       SESSION_AGENT_DATASOURCE_URL: jdbc:postgresql://session-agent-postgres:5432/session_agent
       SESSION_AGENT_DATASOURCE_USERNAME: session_agent
       SESSION_AGENT_DATASOURCE_PASSWORD: ${SESSION_AGENT_POSTGRES_PASSWORD:?required}
-      SEMANTIC_BASE_URL: http://semantic-service:8080
-      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN:?required}
+      SEMANTIC_BASE_URL: http://semantic-query:8080
+      SEMANTIC_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:?required}
       SPRING_AI_GOOGLE_GENAI_API_KEY: ${GOOGLE_API_KEY:?required}
       GOOGLE_GENAI_MODEL: ${GOOGLE_GENAI_MODEL:-gemini-3.1-flash-lite}
@@ -63,9 +155,8 @@ services:
       SLACK_BOT_TOKEN: ${SLACK_BOT_TOKEN:-}
       SLACK_BOT_USER_ID: ${SLACK_BOT_USER_ID:-}
       SERVER_ADDRESS: 0.0.0.0
-    ports:
-      - "127.0.0.1:${SESSION_AGENT_HOST_PORT:-8090}:8080"
-    networks: [session-agent-network]
+    ports: ["127.0.0.1:${SESSION_AGENT_HOST_PORT:-8090}:8080"]
+    networks: [semantic-read, session-agent-network, model-egress]
 
   fixture-init:
     <<: *runtime-logging
@@ -73,83 +164,67 @@ services:
     profiles: [setup]
     user: "0:0"
     entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - >-
-        cp -a /fixture-source/payment-service/. /fixtures/payment-service/ &&
-        cp -a /fixture-source/order-service/. /fixtures/order-service/ &&
-        chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service
+    command: >-
+      cp -a /fixture-source/payment-service/. /fixtures/payment-service/ &&
+      cp -a /fixture-source/order-service/. /fixtures/order-service/ &&
+      cp -a /fixture-source/video-service/. /fixtures/video-service/ &&
+      chown -R 10001:10001 /fixtures
     volumes:
       - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/payment-service:/fixture-source/payment-service:ro
       - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/order-service:/fixture-source/order-service:ro
+      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/video-service:/fixture-source/video-service:ro
       - payment-service-fixture:/fixtures/payment-service
       - order-service-fixture:/fixtures/order-service
+      - video-service-fixture:/fixtures/video-service
     restart: "no"
-    networks: [session-agent-network]
+    networks: [semantic-admin]
 
-  semantic-probe:
-    <<: *runtime-logging
+  semantic-index-probe:
     image: curlimages/curl:8.12.1
-    profiles: [semantic-check]
-    depends_on:
-      semantic-service:
-        condition: service_started
+    profiles: [semantic-index-check]
     environment:
-      SEMANTIC_API_TOKEN: ${SEMANTIC_API_TOKEN:?required}
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - >-
-        curl --fail --silent --show-error --retry 30 --retry-delay 2
-        --retry-connrefused --connect-timeout 5 --max-time 10
-        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
-        http://semantic-service:8080/v1/repositories >/dev/null &&
-        curl --fail --silent --show-error -X POST
-        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
-        --connect-timeout 5 --max-time 120
-        http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null &&
-        curl --fail --silent --show-error -X POST
-        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
-        --connect-timeout 5 --max-time 120
-        http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null &&
-        curl --fail --silent --show-error
-        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
-        --connect-timeout 5 --max-time 30
-        http://semantic-service:8080/v1/repositories/payment-service >/dev/null &&
-        curl --fail --silent --show-error
-        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
-        --connect-timeout 5 --max-time 120
-        "http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE" >/dev/null &&
-        curl --fail --silent --show-error -X POST
-        -H "X-Api-Token: $$SEMANTIC_API_TOKEN"
-        -H "Content-Type: application/json"
-        --connect-timeout 5 --max-time 120
-        --data-binary '{"repoId":"payment-service","expectedRevision":"FIXTURE","target":{"kind":"METHOD","identity":{"sourceType":{"javaType":{"packageName":"com.example.payment","className":"PaymentFeeSettings"},"sourceFile":"src/main/java/com/example/payment/PaymentFeeSettings.java"},"methodName":"loadFeeFormulaJson","parameterTypes":["com.example.payment.PaymentMethod"]}},"offset":0,"limit":50}'
-        http://semantic-service:8080/v1/discovery/internal-references >/dev/null
+      SEMANTIC_INDEXER_ADMIN_TOKEN: ${SEMANTIC_INDEXER_ADMIN_TOKEN:?required}
+    command: ["/bin/sh", "-ec", "curl --fail --silent --show-error --retry 30 --retry-connrefused -H X-Api-Token:\ $$SEMANTIC_INDEXER_ADMIN_TOKEN -X POST http://semantic-indexer:8080/index/repositories/payment-service/ensure"]
     restart: "no"
-    networks: [session-agent-network]
+    networks: [semantic-admin]
+
+  semantic-query-probe:
+    image: curlimages/curl:8.12.1
+    profiles: [semantic-query-check]
+    environment:
+      SEMANTIC_QUERY_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
+    command: ["/bin/sh", "-ec", "curl --fail --silent --show-error --retry 30 --retry-connrefused -H X-Api-Token:\ $$SEMANTIC_QUERY_API_TOKEN http://semantic-query:8080/v1/repositories >/dev/null"]
+    restart: "no"
+    networks: [semantic-read]
 
   runtime-probe:
-    <<: *runtime-logging
     image: curlimages/curl:8.12.1
     profiles: [runtime-check]
-    depends_on:
-      session-agent-runtime:
-        condition: service_started
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - >-
-        curl --fail --silent --show-error --retry 30 --retry-delay 2
-        --retry-connrefused --connect-timeout 5 --max-time 10
-        http://session-agent-runtime:8080/actuator/health >/dev/null
+    command: ["/bin/sh", "-ec", "curl --fail --silent --show-error --retry 30 --retry-connrefused http://session-agent-runtime:8080/actuator/health >/dev/null"]
     restart: "no"
-    networks: [session-agent-network]
+    networks: [semantic-read]
+
+  model-egress-canary:
+    image: hashicorp/http-echo:1.0.0
+    profiles: [uat-evidence]
+    command: ["-listen=:8080", "-text=model-egress-ok"]
+    networks: [model-egress]
 
 volumes:
   session-agent-postgres-data:
+  semantic-mongodb-data:
   payment-service-fixture:
   order-service-fixture:
+  video-service-fixture:
+  semantic-indexer-repository-data:
+  semantic-indexer-jdt-data:
   semantic-repository-data:
   semantic-jdt-data:
 
 networks:
   session-agent-network:
-    driver: bridge
+    internal: true
+  semantic-read:
+    internal: true
+  semantic-admin:
+  model-egress:

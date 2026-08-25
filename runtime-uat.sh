@@ -45,12 +45,12 @@ runtime_uat_main() {
     main
     [[ -f "${RUNTIME_SOURCE}/pom.xml" ]] || runtime_uat_fail "Session Agent Runtime source is unavailable"
 
-    semantic_token="$(env_value SEMANTIC_API_TOKEN)"
+    semantic_token="$(env_value SEMANTIC_QUERY_API_TOKEN)"
     google_key="$(env_value GOOGLE_API_KEY)"
     model="$(env_or_default GOOGLE_GENAI_MODEL gemini-3.1-flash-lite)"
     runtime_port="$(env_or_default SESSION_AGENT_HOST_PORT 8090)"
     semantic_port="$(env_or_default SEMANTIC_HOST_PORT 8080)"
-    [[ -n "${semantic_token}" ]] || runtime_uat_fail "SEMANTIC_API_TOKEN is blank"
+    [[ -n "${semantic_token}" ]] || runtime_uat_fail "SEMANTIC_QUERY_API_TOKEN is blank"
     [[ -n "${google_key}" ]] || runtime_uat_fail "GOOGLE_API_KEY is blank"
 
     export SESSION_AGENT_LIVE=true

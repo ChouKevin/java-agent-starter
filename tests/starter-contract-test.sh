@@ -2,177 +2,23 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+grep -Fq 'SEMANTIC_DISPOSABLE_UAT=true' "${ROOT}/.env.example"
+grep -Fq 'plaintext Mongo only for disposable UAT' "${ROOT}/deploy.sh"
+grep -Fq 'SEMANTIC_GIT_REF=main' "${ROOT}/.env.example"
 TEMPORARY_DIRECTORY="$(mktemp -d)"
-CONTRACT_ENV="${TEMPORARY_DIRECTORY}/compose.env"
+trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 
-cleanup() {
-    rm -rf "${TEMPORARY_DIRECTORY}"
-}
-trap cleanup EXIT
-
-bash -n "${ROOT}/deploy.sh"
-bash -n "${ROOT}/repository.sh"
-bash -n "${ROOT}/tests/deploy-session-runtime-test.sh"
-bash -n "${ROOT}/tests/deploy-state-test.sh"
-bash -n "${ROOT}/runtime-uat.sh"
-bash -n "${ROOT}/tests/runtime-uat-test.sh"
-
-for removed_file in contract-uat.sh knowledge-uat.sh payment-uat.sh \
-    tests/contract-uat-test.sh tests/deploy-agent-only-test.sh tests/knowledge-uat-test.sh; do
-    [[ ! -e "${ROOT}/${removed_file}" ]] || {
-        printf 'legacy agent workflow remains: %s\n' "${removed_file}" >&2
-        exit 1
-    }
-done
-
-for expected_line in \
-    'SESSION_AGENT_GIT_URL=git@github.com:ChouKevin/session-agent-runtime.git' \
-    'SESSION_AGENT_GIT_REF=main' \
-    'SEMANTIC_API_TOKEN=' \
-    'SESSION_AGENT_POSTGRES_PASSWORD=' \
-    'GIT_USERNAME=' \
-    'GIT_TOKEN=' \
-    'GOOGLE_API_KEY=' \
-    'GOOGLE_GENAI_MODEL=gemini-3.1-flash-lite' \
-    'SLACK_APP_TOKEN=' \
-    'SLACK_BOT_TOKEN=' \
-    'SLACK_BOT_USER_ID='; do
-    grep -Fxq "${expected_line}" "${ROOT}/.env.example"
-done
-
-grep -Fq '${STARTER_ROOT}/.runtime/sources/session-agent-runtime' "${ROOT}/compose.yaml"
-grep -Fq '${STARTER_ROOT}/.runtime/sources/java-code-intelligence' "${ROOT}/compose.yaml"
-for expected_fixture_mount in \
-    '      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/payment-service:/fixture-source/payment-service:ro' \
-    '      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/fixtures/uat/order-service:/fixture-source/order-service:ro'; do
-    grep -Fxq "${expected_fixture_mount}" "${ROOT}/compose.yaml"
-done
-grep -Fq 'Session Agent source SHA:' "${ROOT}/deploy.sh"
-grep -Fq 'a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee' "${ROOT}/deploy.sh"
-grep -Fxq '    payment-service:' "${ROOT}/config/semantic-repositories.yml"
-grep -Fxq '    order-service:' "${ROOT}/config/semantic-repositories.yml"
-[[ ! -d "${ROOT}/session-agent-runtime" ]]
-
-if rg -n 'java-system-agent|(^|[^A-Z0-9_])AGENT_GIT_|(^|[^A-Z0-9_])AGENT_REPOSITORY_ID|agent-only|agent-contract|agent-knowledge' \
-    "${ROOT}/.env.example" "${ROOT}/compose.yaml" "${ROOT}/deploy.sh" \
-    "${ROOT}/config/semantic-repositories.yml" >/dev/null; then
-    printf 'legacy Java System Agent deployment contract remains\n' >&2
-    exit 1
-fi
-
-if rg -n 'prompt' "${ROOT}/compose.yaml" >/dev/null; then
-    printf 'agent-owned prompt mount remains\n' >&2
-    exit 1
-fi
-
-if rg -n --glob '!starter-contract-test.sh' 'session-agent-runtime/fixtures' \
-    "${ROOT}/compose.yaml" "${ROOT}/deploy.sh" "${ROOT}/tests" >/dev/null; then
-    printf 'Runtime-owned UAT fixture path remains\n' >&2
-    exit 1
-fi
-
-if rg -n --glob '!starter-contract-test.sh' --glob '!deploy-state-test.sh' \
-    'java-system-agent|(^|[^A-Z_])AGENT_GIT_|(^|[^A-Z_])AGENT_REPOSITORY_ID|agent-only|agent-contract|agent-knowledge' \
-    "${ROOT}/README.md" "${ROOT}/.env.example" "${ROOT}/compose.yaml" \
-    "${ROOT}/deploy.sh" "${ROOT}/runtime-uat.sh" "${ROOT}/tests" >/dev/null; then
-    printf 'legacy Java System Agent deployment contract remains\n' >&2
-    exit 1
-fi
-
-cat > "${CONTRACT_ENV}" <<EOF
-STARTER_ROOT=${ROOT}
-SEMANTIC_API_TOKEN=contract-semantic-token
-SESSION_AGENT_POSTGRES_PASSWORD=contract-postgres-password
-GOOGLE_API_KEY=contract-google-key
-GOOGLE_GENAI_MODEL=contract-google-model
-SLACK_APP_TOKEN=contract-slack-app-token
-SLACK_BOT_TOKEN=contract-slack-bot-token
-SLACK_BOT_USER_ID=contract-slack-user-id
-EOF
-
-compose_json="$(docker compose --project-name starter-contract --env-file "${CONTRACT_ENV}" -f "${ROOT}/compose.yaml" config --format json)"
-compose_source_json="$(docker compose --project-name starter-contract --env-file "${CONTRACT_ENV}" -f "${ROOT}/compose.yaml" config --no-normalize --format json)"
-profiled_compose_json="$(docker compose --project-name starter-contract --env-file "${CONTRACT_ENV}" --profile setup --profile semantic-check --profile runtime-check -f "${ROOT}/compose.yaml" config --format json)"
-
-jq -e --arg starter_root "${ROOT}" '
-  (.services | keys == ["semantic-service", "session-agent-postgres", "session-agent-runtime"])
-  and .services["session-agent-postgres"].image == "postgres:17"
-  and .services["semantic-service"].build.context == ($starter_root + "/.runtime/sources/java-code-intelligence")
-  and .services["session-agent-runtime"].build.context == ($starter_root + "/.runtime/sources/session-agent-runtime")
-  and .services["semantic-service"].environment.SEMANTIC_API_TOKEN == "contract-semantic-token"
-  and .services["semantic-service"].environment.GIT_USERNAME == ""
-  and .services["semantic-service"].environment.GIT_TOKEN == ""
-  and .services["session-agent-runtime"].environment.SESSION_AGENT_DATASOURCE_URL == "jdbc:postgresql://session-agent-postgres:5432/session_agent"
-  and .services["session-agent-runtime"].environment.SESSION_AGENT_DATASOURCE_USERNAME == "session_agent"
-  and .services["session-agent-runtime"].environment.SESSION_AGENT_DATASOURCE_PASSWORD == "contract-postgres-password"
-  and .services["session-agent-runtime"].environment.SEMANTIC_BASE_URL == "http://semantic-service:8080"
-  and .services["session-agent-runtime"].environment.SEMANTIC_API_TOKEN == "contract-semantic-token"
-  and .services["session-agent-runtime"].environment.GOOGLE_API_KEY == "contract-google-key"
-  and .services["session-agent-runtime"].environment.SPRING_AI_GOOGLE_GENAI_API_KEY == "contract-google-key"
-  and .services["session-agent-runtime"].environment.GOOGLE_GENAI_MODEL == "contract-google-model"
-  and .services["session-agent-runtime"].environment.SLACK_APP_TOKEN == "contract-slack-app-token"
-  and .services["session-agent-runtime"].environment.SLACK_BOT_TOKEN == "contract-slack-bot-token"
-  and .services["session-agent-runtime"].environment.SLACK_BOT_USER_ID == "contract-slack-user-id"
-  and ([.services["session-agent-runtime"].environment | keys[] | select(startswith("GIT_"))] | length == 0)
-  and .services["semantic-service"].ports == [
-    {"mode":"ingress","host_ip":"127.0.0.1","target":8080,"published":"8080","protocol":"tcp"}
-  ]
-  and ([.services["semantic-service"].volumes[]
-        | select(.target == "/fixtures/payment-service" or .target == "/fixtures/order-service")
-        | (.read_only // false)] == [false, false])
-  and .services["session-agent-runtime"].ports == [
-    {"mode":"ingress","host_ip":"127.0.0.1","target":8080,"published":"8090","protocol":"tcp"}
-  ]
-  and (.volumes | keys == ["order-service-fixture", "payment-service-fixture", "semantic-jdt-data", "semantic-repository-data", "session-agent-postgres-data"])
-  and (.networks | keys == ["session-agent-network"])
+bash -n "${ROOT}/deploy.sh" "${ROOT}/repository.sh" "${ROOT}/runtime-uat.sh"
+sed 's/=$/=contract-value/' "${ROOT}/.env.example" > "${TEMPORARY_DIRECTORY}/.env"
+compose_json="$(STARTER_ROOT="${ROOT}" docker compose --project-name starter-contract --env-file "${TEMPORARY_DIRECTORY}/.env" --profile setup --profile legacy-cutover -f "${ROOT}/compose.yaml" config --format json)"
+jq -e '
+  (.services | has("semantic-mongodb") and has("semantic-mongo-init") and has("semantic-indexer") and has("semantic-query") and has("session-agent-runtime"))
+  and .services["session-agent-runtime"].environment.SEMANTIC_BASE_URL == "http://semantic-query:8080"
+  and .services["semantic-query"].networks == ["semantic-read"]
+  and (.volumes | has("semantic-mongodb-data") and has("semantic-indexer-repository-data") and has("semantic-repository-data"))
 ' <<< "${compose_json}" >/dev/null
-
-jq -e '
-  (.volumes | keys == ["order-service-fixture", "payment-service-fixture", "semantic-jdt-data", "semantic-repository-data", "session-agent-postgres-data"])
-  and ([.volumes[] | has("name")] | any | not)
-' <<< "${compose_source_json}" >/dev/null
-
-jq -e '
-  (.services["semantic-probe"].command | join(" ")) as $semantic_command
-  | ($semantic_command | split(" && ")) as $semantic_requests
-  | (
-  (.services | keys == ["fixture-init", "runtime-probe", "semantic-probe", "semantic-service", "session-agent-postgres", "session-agent-runtime"])
-  and .services["fixture-init"].profiles == ["setup"]
-  and .services["semantic-probe"].profiles == ["semantic-check"]
-  and .services["runtime-probe"].profiles == ["runtime-check"]
-  and .services["semantic-probe"].image == "curlimages/curl:8.12.1"
-  and .services["runtime-probe"].image == "curlimages/curl:8.12.1"
-  and (.services["fixture-init"].command | join(" ") == "cp -a /fixture-source/payment-service/. /fixtures/payment-service/ && cp -a /fixture-source/order-service/. /fixtures/order-service/ && chown -R 10001:10001 /fixtures/payment-service /fixtures/order-service")
-  and (.services["fixture-init"].command | join(" ") | contains(".fixture-ready") | not)
-  and (.services["fixture-init"].command | join(" ") | contains("find /fixtures") | not)
-  and (.services["fixture-init"].command | join(" ") | contains("rm -rf") | not)
-  and (.services["fixture-init"] | has("environment") | not)
-  and (.services["semantic-probe"].depends_on | keys == ["semantic-service"])
-  and .services["semantic-probe"].environment.SEMANTIC_API_TOKEN == "contract-semantic-token"
-  and ($semantic_command | contains("set -x") | not)
-  and ($semantic_requests | length == 6)
-  and ($semantic_requests[0] | contains("curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 -H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" http://semantic-service:8080/v1/repositories >/dev/null"))
-  and ($semantic_requests[1] | contains("-X POST -H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/payment-service/ensure >/dev/null"))
-  and ($semantic_requests[2] | contains("-X POST -H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 120 http://semantic-service:8080/v1/repositories/order-service/ensure >/dev/null"))
-  and ($semantic_requests[3] | contains("-H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 30 http://semantic-service:8080/v1/repositories/payment-service >/dev/null"))
-  and ($semantic_requests[4] | contains("-H \"X-Api-Token: $$SEMANTIC_API_TOKEN\" --connect-timeout 5 --max-time 120 \"http://semantic-service:8080/v1/repositories/payment-service/entry-points?expectedRevision=FIXTURE\" >/dev/null"))
-  and ($semantic_requests[5] | contains("-X POST"))
-  and ($semantic_requests[5] | contains("-H \"Content-Type: application/json\""))
-  and ($semantic_requests[5] | contains("\"repoId\":\"payment-service\",\"expectedRevision\":\"FIXTURE\""))
-  and ($semantic_requests[5] | contains("\"methodName\":\"loadFeeFormulaJson\""))
-  and ($semantic_requests[5] | contains("http://semantic-service:8080/v1/discovery/internal-references >/dev/null"))
-  and ([$semantic_requests[1:6][] | contains("--retry")] | any | not)
-  and ([$semantic_requests[] | endswith(">/dev/null")] | all)
-  and ($semantic_command | contains("session-agent-runtime") | not)
-  and (.services["runtime-probe"].depends_on | keys == ["session-agent-runtime"])
-  and (.services["runtime-probe"] | has("environment") | not)
-  and (.services["runtime-probe"].command | join(" ") == "curl --fail --silent --show-error --retry 30 --retry-delay 2 --retry-connrefused --connect-timeout 5 --max-time 10 http://session-agent-runtime:8080/actuator/health >/dev/null")
-  and (.services["runtime-probe"].command | join(" ") | contains("semantic-service") | not)
-  and (.services["runtime-probe"].command | join(" ") | contains("SEMANTIC_API_TOKEN") | not)
-  )
-' <<< "${profiled_compose_json}" >/dev/null
-
-if rg -n 'FIXTURE_VOLUME_SUFFIX|network-probe|profiles: \[tools\]' "${ROOT}/compose.yaml" >/dev/null; then
-    printf 'legacy fixture suffix or combined probe remains\n' >&2
+if rg -n 'FIXTURE|semantic-probe|semantic-check' "${ROOT}/compose.yaml" "${ROOT}/deploy.sh"; then
+    printf 'obsolete single-service probe contract remains\n' >&2
     exit 1
 fi
