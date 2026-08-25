@@ -42,7 +42,9 @@ runtime_uat_main() {
     local semantic_port
 
     [[ "$#" -eq 0 ]] || runtime_uat_fail "usage: ./runtime-uat.sh"
-    main
+    acquire_deploy_lock
+    export SEMANTIC_UAT_PROFILE=uat
+    "${ROOT}/semantic-index-uat.sh"
     [[ -f "${RUNTIME_SOURCE}/pom.xml" ]] || runtime_uat_fail "Session Agent Runtime source is unavailable"
 
     semantic_token="$(env_value SEMANTIC_QUERY_API_TOKEN)"

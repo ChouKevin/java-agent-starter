@@ -21,6 +21,7 @@ trap cleanup EXIT
 
 mkdir -p "${FAKE_STARTER}/.runtime/sources/session-agent-runtime" "${FAKE_STARTER}/bin"
 cp "${ROOT}/runtime-uat.sh" "${FAKE_STARTER}/runtime-uat.sh"
+cp "${ROOT}/semantic-index-uat.sh" "${FAKE_STARTER}/semantic-index-uat.sh"
 touch "${FAKE_STARTER}/.runtime/sources/session-agent-runtime/pom.xml"
 cat > "${FAKE_STARTER}/.env" <<EOF
 SEMANTIC_QUERY_API_TOKEN=${SECRET_TOKEN}
@@ -40,8 +41,22 @@ main() {
     flock -n "\${DEPLOY_LOCK_FD}"
     printf 'deploy\n' >> '${CALL_LOG}'
 }
+acquire_deploy_lock() {
+    main
+    STARTER_DEPLOY_LOCK_FD="\${DEPLOY_LOCK_FD}"
+    export STARTER_DEPLOY_LOCK_FD
+}
 EOF
 chmod +x "${FAKE_STARTER}/deploy.sh"
+
+cat > "${FAKE_STARTER}/semantic-index-uat.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "\${STARTER_DEPLOY_LOCK_FD}" =~ ^[0-9]+$ ]]
+[[ "\${SEMANTIC_UAT_PROFILE}" == uat ]]
+printf 'semantic\n' >> '${CALL_LOG}'
+EOF
+chmod +x "${FAKE_STARTER}/semantic-index-uat.sh"
 
 cat > "${FAKE_STARTER}/bin/mvn" <<EOF
 #!/usr/bin/env bash
@@ -78,8 +93,8 @@ grep -Fq 'usage: ./runtime-uat.sh' "${OUTPUT_LOG}"
 
 PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/runtime-uat.sh" > "${OUTPUT_LOG}" 2>&1
 
-[[ "$(<"${CALL_LOG}")" == $'deploy\nmvn:true:http://127.0.0.1:18090:http://127.0.0.1:18080:contract-model' ]] || {
-    printf 'runtime UAT did not deploy before the external live test\n' >&2
+[[ "$(<"${CALL_LOG}")" == $'deploy\nsemantic\nmvn:true:http://127.0.0.1:18090:http://127.0.0.1:18080:contract-model' ]] || {
+    printf 'runtime UAT did not run Semantic acceptance once before the external live test\n' >&2
     exit 1
 }
 ! grep -Fq "${SECRET_TOKEN}" "${OUTPUT_LOG}"

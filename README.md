@@ -81,6 +81,13 @@ authenticated Semantic probe and the required Runtime commit gate are the UAT
 checks before LiveIT; the Runtime-to-Semantic operation remains covered by
 LiveIT.
 
+Before `SessionAgentLiveIT`, the command runs `semantic-index-uat.sh` exactly
+once while retaining the same deployment lock. That acceptance explicitly
+resets only disposable UAT data, starts the Indexer UAT profile
+(`SEMANTIC_UAT_PROFILE=uat`) for its pre-publication pause control, and leaves
+the final cold Query/MongoDB state available to LiveIT. The UAT profile is
+empty by default and is not enabled by normal deployments.
+
 The Runtime owns the conversation and tool loop, citations, persistence, live
 acceptance, and its dedicated database. It uses Semantic for repository/source
 analysis and Google for model access. Slack values in `.env` are reserved

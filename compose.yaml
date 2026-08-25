@@ -88,6 +88,7 @@ services:
     environment:
       SEMANTIC_MONGODB_URI: mongodb://semantic_indexer:${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}@semantic-mongodb:27017/semantic?authSource=semantic
       SEMANTIC_INDEXER_ADMIN_TOKEN: ${SEMANTIC_INDEXER_ADMIN_TOKEN:?required}
+      SPRING_PROFILES_ACTIVE: ${SEMANTIC_UAT_PROFILE:-}
       GIT_USERNAME: ${GIT_USERNAME:-}
       GIT_TOKEN: ${GIT_TOKEN:-}
       JDTLS_MAX_ACTIVE_WORKSPACES: ${JDTLS_MAX_ACTIVE_WORKSPACES:-2}

@@ -36,6 +36,17 @@ env_or_default() {
 }
 
 acquire_deploy_lock() {
+    if [[ "${STARTER_DEPLOY_LOCK_FD:-}" =~ ^[0-9]+$ && -e "/proc/$$/fd/${STARTER_DEPLOY_LOCK_FD}" ]]; then
+        local inherited_target expected_target
+        inherited_target="$(readlink -f "/proc/$$/fd/${STARTER_DEPLOY_LOCK_FD}")" || fail "inherited deployment lock is unavailable"
+        expected_target="$(readlink -f "${DEPLOY_LOCK_FILE}")" || fail "deployment lock path is unavailable"
+        [[ "${inherited_target}" == "${expected_target}" ]] \
+            || fail "inherited deployment lock is not ${DEPLOY_LOCK_FILE}"
+        flock -n "${STARTER_DEPLOY_LOCK_FD}" || fail "inherited deployment lock is not held"
+        DEPLOY_LOCK_FD="${STARTER_DEPLOY_LOCK_FD}"
+        export STARTER_DEPLOY_LOCK_FD
+        return
+    fi
     mkdir -p "${ROOT}/.runtime"
     exec {DEPLOY_LOCK_FD}>"${DEPLOY_LOCK_FILE}"
     flock -n "${DEPLOY_LOCK_FD}" || fail "another starter deployment holds ${DEPLOY_LOCK_FILE}"
@@ -491,7 +502,7 @@ main() {
     prepare_sources "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}"
     detect_legacy_cutover
     if [[ -n "${LEGACY_CONTAINER_ID}" ]]; then
-        prepare_legacy_cutover_image "${semantic_url}" "$(env_or_default SEMANTIC_LEGACY_REF 366f870c269df27a22ab26e4becdc08359573ff1)"
+        prepare_legacy_cutover_image "${semantic_url}" "$(env_or_default SEMANTIC_LEGACY_REF cf588ff)"
         activate_pinned_legacy_cutover || fail "pinned legacy Semantic could not be activated"
     fi
     case "${mode}" in
