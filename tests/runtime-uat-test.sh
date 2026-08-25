@@ -23,7 +23,7 @@ mkdir -p "${FAKE_STARTER}/.runtime/sources/session-agent-runtime" "${FAKE_STARTE
 cp "${ROOT}/runtime-uat.sh" "${FAKE_STARTER}/runtime-uat.sh"
 touch "${FAKE_STARTER}/.runtime/sources/session-agent-runtime/pom.xml"
 cat > "${FAKE_STARTER}/.env" <<EOF
-SEMANTIC_API_TOKEN=${SECRET_TOKEN}
+SEMANTIC_QUERY_API_TOKEN=${SECRET_TOKEN}
 GOOGLE_API_KEY=${SECRET_KEY}
 GOOGLE_GENAI_MODEL=contract-model
 SESSION_AGENT_HOST_PORT=18090

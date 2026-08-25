@@ -34,6 +34,14 @@ env_or_default() {
     [[ -n "${configured}" ]] && printf '%s' "${configured}" || printf '%s' "$2"
 }
 
+acquire_deploy_lock() {
+    local lock_file="${ROOT}/.runtime/deploy.lock"
+
+    mkdir -p "${ROOT}/.runtime"
+    exec {DEPLOY_LOCK_FD}>"${lock_file}"
+    flock -n "${DEPLOY_LOCK_FD}" || fail "another starter deployment holds ${lock_file}"
+}
+
 create_env_if_missing() {
     local semantic_token indexer_token postgres_password root_password bootstrap_password indexer_password query_password
     [[ ! -e "${ENV_FILE}" ]] || { [[ -s "${ENV_FILE}" ]] || fail "${ENV_FILE} exists but is empty"; return; }
@@ -345,6 +353,34 @@ prepare_legacy_cutover_image() {
     docker build --tag java-agent-semantic-legacy --file "${legacy_directory}/Dockerfile" "${legacy_directory}" || fail "legacy image build failed"
 }
 
+wait_for_legacy_semantic() {
+    local deadline port token
+    port="$(env_or_default SEMANTIC_HOST_PORT 8080)"
+    token="$(env_value SEMANTIC_QUERY_API_TOKEN)"
+    deadline=$((SECONDS + STARTUP_WAIT_SECONDS))
+    while (( SECONDS < deadline )); do
+        if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
+                -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/v1/repositories" >/dev/null; then
+            return
+        fi
+        sleep 2
+    done
+    printf 'deploy: pinned legacy Semantic did not become ready within %ss\n' "${STARTUP_WAIT_SECONDS}" >&2
+    return 1
+}
+
+activate_pinned_legacy_cutover() {
+    local actual_image expected_image
+    SEMANTIC_LEGACY_IMAGE=java-agent-semantic-legacy \
+        "${COMPOSE[@]}" --profile legacy-cutover up -d --force-recreate --no-deps semantic-service || return 1
+    detect_legacy_cutover
+    [[ -n "${LEGACY_CONTAINER_ID}" ]] || return 1
+    expected_image="$(docker image inspect --format '{{.Id}}' java-agent-semantic-legacy)" || return 1
+    actual_image="$(docker inspect --format '{{.Image}}' "${LEGACY_CONTAINER_ID}")" || return 1
+    [[ "${actual_image}" == "${expected_image}" ]] || return 1
+    wait_for_legacy_semantic
+}
+
 restart_legacy_on_query_failure() { "${COMPOSE[@]}" --profile legacy-cutover start semantic-service >/dev/null 2>&1 || true; }
 
 detect_legacy_cutover() {
@@ -438,7 +474,9 @@ main() {
     command -v git >/dev/null 2>&1 || fail "git is required"
     command -v docker >/dev/null 2>&1 || fail "docker is required"
     command -v jq >/dev/null 2>&1 || fail "jq is required"
+    command -v flock >/dev/null 2>&1 || fail "flock is required"
     docker compose version >/dev/null 2>&1 || fail "docker compose is required"
+    acquire_deploy_lock
     create_env_if_missing
     assert_required_secrets
     [[ "$(env_or_default SEMANTIC_DISPOSABLE_UAT false)" == true ]] \
@@ -453,6 +491,7 @@ main() {
     detect_legacy_cutover
     if [[ -n "${LEGACY_CONTAINER_ID}" ]]; then
         prepare_legacy_cutover_image "${semantic_url}" "$(env_or_default SEMANTIC_LEGACY_REF 366f870c269df27a22ab26e4becdc08359573ff1)"
+        activate_pinned_legacy_cutover || fail "pinned legacy Semantic could not be activated"
     fi
     case "${mode}" in
         normal) capture_query_image false || fail "could not preserve the current Query image" ;;

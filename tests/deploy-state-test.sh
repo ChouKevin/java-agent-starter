@@ -9,6 +9,12 @@ grep -Fq 'mktemp -d "${SOURCES_DIR}/.staging.XXXXXX"' "${ROOT}/deploy.sh"
 grep -Fq 'merge-base --is-ancestor "${required_commit}" "${target}"' "${ROOT}/deploy.sh"
 grep -Fq 'status --porcelain' "${ROOT}/deploy.sh"
 grep -Fq 'RESET WILL DELETE ALL NAMED VOLUMES' "${ROOT}/deploy.sh"
+grep -Fq 'acquire_deploy_lock' "${ROOT}/deploy.sh"
+main_block="$(awk '/main\(\)/,/^}/' "${ROOT}/deploy.sh")"
+grep -Fq 'command -v flock' <<< "${main_block}"
+lock_line="$(grep -n 'acquire_deploy_lock' <<< "${main_block}" | cut -d: -f1)"
+prepare_line="$(grep -n 'prepare_sources' <<< "${main_block}" | cut -d: -f1)"
+[[ -n "${lock_line}" && -n "${prepare_line}" && "${lock_line}" -lt "${prepare_line}" ]]
 awk '/reset_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | grep -Fq 'down --remove-orphans --volumes'
 if awk '/normal_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | rg -- '--volumes'; then
     printf 'normal deployment deletes volumes\n' >&2
