@@ -46,6 +46,20 @@ REQUIRED_RUNTIME_COMMIT=""
 prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIRECTORY}/semantic.git" main
 runtime_before="$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)"
 
+printf 'dirty\n' > "${SOURCES_DIR}/session-agent-runtime/local-change.txt"
+if (prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIRECTORY}/semantic.git" main); then
+    printf 'dirty managed source unexpectedly accepted an update\n' >&2
+    exit 1
+fi
+rm "${SOURCES_DIR}/session-agent-runtime/local-change.txt"
+
+git -C "${SOURCES_DIR}/session-agent-runtime" remote set-url origin "${TEMPORARY_DIRECTORY}/semantic.git"
+if (prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIRECTORY}/semantic.git" main); then
+    printf 'managed source with a changed origin unexpectedly accepted an update\n' >&2
+    exit 1
+fi
+git -C "${SOURCES_DIR}/session-agent-runtime" remote set-url origin "${TEMPORARY_DIRECTORY}/runtime.git"
+
 if (prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIRECTORY}/missing-semantic.git" main); then
     printf 'semantic source staging unexpectedly succeeded\n' >&2
     exit 1

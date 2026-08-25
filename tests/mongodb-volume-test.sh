@@ -10,6 +10,10 @@ grep -Fq 'semantic_query' "${ROOT}/compose.yaml"
 grep -Fq 'semantic_indexer' "${ROOT}/compose.yaml"
 grep -Fq 'semantic.schema-bootstrap=true' "${ROOT}/compose.yaml"
 grep -Fq 'semantic-mongo-users' "${ROOT}/compose.yaml"
+mongo_users_block="$(awk '/^  semantic-mongo-users:/{active=1} active && /^  [a-z].*:$/ && !/^  semantic-mongo-users:/{exit} active {print}' "${ROOT}/compose.yaml")"
+[[ "${mongo_users_block}" == *'entrypoint: ["/bin/sh", "-ec"]'* ]]
+[[ "${mongo_users_block}" == *'exec mongosh'* ]]
+[[ "${mongo_users_block}" == *'"$SEMANTIC_MONGO_ROOT_USERNAME"'* ]]
 grep -Fq 'run --rm semantic-mongo-users' "${ROOT}/deploy.sh"
 grep -Fq 'run --rm semantic-mongo-init' "${ROOT}/deploy.sh"
 grep -Fq 'semantic_bootstrap' "${ROOT}/config/mongo-init.js"

@@ -7,14 +7,31 @@ trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 printf 'SEMANTIC_QUERY_API_TOKEN=read-token\nSEMANTIC_HOST_PORT=18080\nSEMANTIC_INDEXER_ADMIN_TOKEN=index-token\nSEMANTIC_INDEXER_HOST_PORT=18081\n' > "${TEMPORARY_DIRECTORY}/.env"
 source "${ROOT}/repository.sh"
 ENV_FILE="${TEMPORARY_DIRECTORY}/.env"
-curl() { CURL_ARGUMENTS=("$@"); }
+CALL_LOG="${TEMPORARY_DIRECTORY}/calls.log"
+pointer='{"revision":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","generationId":"g-current","manifestDigest":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","committedJobId":"job-current","publishedAt":"2026-08-22T00:00:00Z"}'
+curl() {
+    CURL_ARGUMENTS=("$@")
+    printf '%s\n' "$*" >> "${CALL_LOG}"
+    if [[ "$*" == *'/publication'* ]]; then
+        jq -cn --argjson current "${pointer}" '{currentPointer:$current,rollbackPointer:null}'
+    else
+        printf '{"jobId":"accepted"}'
+    fi
+}
 
 main list
 [[ "${CURL_ARGUMENTS[*]}" == *'X-Api-Token: read-token'* && "${CURL_ARGUMENTS[*]}" == *'127.0.0.1:18080/v1/repositories'* ]]
 main checkout payment-service 0123456789abcdef0123456789abcdef01234567
 [[ "${CURL_ARGUMENTS[*]}" == *'X-Api-Token: index-token'* && "${CURL_ARGUMENTS[*]}" == *'127.0.0.1:18081/index/repositories/payment-service/checkout'* ]]
 main rebuild payment-service
-[[ "${CURL_ARGUMENTS[*]}" == *'authorizeIncompatibleSchema'* ]]
+grep -Fq '127.0.0.1:18081/index/repositories/payment-service/publication' "${CALL_LOG}"
+rebuild_call="$(tail -n1 "${CALL_LOG}")"
+[[ "${rebuild_call}" == *'authorizeIncompatibleSchema'* && "${rebuild_call}" == *'expectedCurrent'* && "${rebuild_call}" == *'job-current'* ]]
+
+main sync payment-service 'feature/quote"safe'
+sync_call="$(tail -n1 "${CALL_LOG}")"
+sync_body="$(sed -n 's/.*--data \({.*}\) http:.*/\1/p' <<< "${sync_call}")"
+jq -e '.branch == "feature/quote\"safe"' <<< "${sync_body}" >/dev/null
 
 CURL_ARGUMENTS=()
 if (main checkout PAYMENT_SERVICE 0123456789abcdef0123456789abcdef01234567); then
@@ -22,6 +39,13 @@ if (main checkout PAYMENT_SERVICE 0123456789abcdef0123456789abcdef01234567); the
     exit 1
 fi
 [[ "${#CURL_ARGUMENTS[@]}" -eq 0 ]]
+
+call_count="$(wc -l < "${CALL_LOG}")"
+if (main rollback payment-service 'not-json'); then
+    printf 'invalid rollback JSON unexpectedly reached Indexer\n' >&2
+    exit 1
+fi
+[[ "$(wc -l < "${CALL_LOG}")" -eq "${call_count}" ]]
 CURL_ARGUMENTS=()
 if (main checkout payment-service 0123456789ABCDEF0123456789ABCDEF01234567); then
     printf 'invalid revision unexpectedly reached Indexer\n' >&2

@@ -33,15 +33,16 @@ indexer_request() {
 }
 
 main() {
+    local body publication
     [[ -s "${ENV_FILE}" ]] || fail "run ./deploy.sh first; ${ENV_FILE} is missing"
     case "${1:-}" in
         list) [[ "$#" -eq 1 ]] || fail 'usage: ./repository.sh list'; query_request GET /v1/repositories ;;
         revision) [[ "$#" -eq 2 ]] || fail 'usage: ./repository.sh revision <repoId>'; repo_id "$2" >/dev/null; query_request GET "/v1/repositories/$2" ;;
         ensure) [[ "$#" -eq 2 ]] || fail 'usage: ./repository.sh ensure <repoId>'; repo_id "$2" >/dev/null; indexer_request POST "/index/repositories/$2/ensure" ;;
-        sync) [[ "$#" -eq 2 || "$#" -eq 3 ]] || fail 'usage: ./repository.sh sync <repoId> [branch]'; repo_id "$2" >/dev/null; indexer_request POST "/index/repositories/$2/sync" "{\"branch\":\"${3:-}\"}" ;;
-        checkout) [[ "$#" -eq 3 ]] || fail 'usage: ./repository.sh checkout <repoId> <revisionSha>'; repo_id "$2" >/dev/null; revision_sha "$3" >/dev/null; indexer_request POST "/index/repositories/$2/checkout" "{\"revision\":\"$3\"}" ;;
-        rebuild) [[ "$#" -eq 2 ]] || fail 'usage: ./repository.sh rebuild <repoId>'; repo_id "$2" >/dev/null; indexer_request POST "/index/repositories/$2/rebuild" '{"authorizeIncompatibleSchema":true}' ;;
-        rollback) [[ "$#" -eq 3 ]] || fail 'usage: ./repository.sh rollback <repoId> <rollback-json>'; repo_id "$2" >/dev/null; indexer_request POST "/index/repositories/$2/rollback" "$3" ;;
+        sync) [[ "$#" -eq 2 || "$#" -eq 3 ]] || fail 'usage: ./repository.sh sync <repoId> [branch]'; repo_id "$2" >/dev/null; body="$(jq -cn --arg branch "${3:-}" '{branch:$branch}')" || fail 'could not encode branch'; indexer_request POST "/index/repositories/$2/sync" "${body}" ;;
+        checkout) [[ "$#" -eq 3 ]] || fail 'usage: ./repository.sh checkout <repoId> <revisionSha>'; repo_id "$2" >/dev/null; revision_sha "$3" >/dev/null; body="$(jq -cn --arg revision "$3" '{revision:$revision}')" || fail 'could not encode revision'; indexer_request POST "/index/repositories/$2/checkout" "${body}" ;;
+        rebuild) [[ "$#" -eq 2 ]] || fail 'usage: ./repository.sh rebuild <repoId>'; repo_id "$2" >/dev/null; publication="$(indexer_request GET "/index/repositories/$2/publication")"; body="$(jq -ce '{authorizeIncompatibleSchema:true, expectedCurrent:(.currentPointer // error("missing current pointer"))}' <<< "${publication}")" || fail 'Indexer returned no current publication pointer'; indexer_request POST "/index/repositories/$2/rebuild" "${body}" ;;
+        rollback) [[ "$#" -eq 3 ]] || fail 'usage: ./repository.sh rollback <repoId> <rollback-json>'; repo_id "$2" >/dev/null; body="$(jq -ce 'if type == "object" then . else error("rollback JSON must be an object") end' <<< "$3")" || fail 'rollback-json must be a valid JSON object'; indexer_request POST "/index/repositories/$2/rollback" "${body}" ;;
         *) fail 'usage: ./repository.sh {list|revision|ensure|sync|checkout|rebuild|rollback}' ;;
     esac
 }

@@ -16,6 +16,8 @@ DEPLOYMENT_SEMANTIC_REF=""
 DEPLOYMENT_SEMANTIC_TARGET_SHA=""
 COMPOSE=()
 LEGACY_CONTAINER_ID=""
+QUERY_BACKUP_IMAGE="java-agent-semantic-query:pre-deploy"
+QUERY_BACKUP_CAPTURED=false
 
 fail() { printf 'deploy: %s\n' "$*" >&2; exit 1; }
 
@@ -170,8 +172,26 @@ configured_repositories() {
 }
 
 bootstrap_schema() {
-    "${COMPOSE[@]}" --profile schema-maintenance run --rm semantic-mongo-users || fail "Mongo user and role bootstrap failed"
-    "${COMPOSE[@]}" --profile schema-maintenance run --rm semantic-mongo-init || fail "versioned schema bootstrap failed"
+    "${COMPOSE[@]}" --profile schema-maintenance run --rm semantic-mongo-users \
+        || { printf 'deploy: Mongo user and role bootstrap failed\n' >&2; return 1; }
+    "${COMPOSE[@]}" --profile schema-maintenance run --rm semantic-mongo-init \
+        || { printf 'deploy: versioned schema bootstrap failed\n' >&2; return 1; }
+}
+
+wait_for_indexer_admin() {
+    local port deadline status
+    port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
+    deadline=$((SECONDS + STARTUP_WAIT_SECONDS))
+    while (( SECONDS < deadline )); do
+        status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --connect-timeout 2 --max-time 5 "http://127.0.0.1:${port}/" || true)"
+        if [[ -n "${status}" && "${status}" != 000 ]]; then
+            return
+        fi
+        sleep 2
+    done
+    printf 'deploy: Indexer admin endpoint did not become ready within %ss\n' "${STARTUP_WAIT_SECONDS}" >&2
+    return 1
 }
 
 poll_index_job() {
@@ -201,6 +221,7 @@ ensure_all_repositories() {
     local repository token port response job_id
     token="$(env_value SEMANTIC_INDEXER_ADMIN_TOKEN)"
     port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
+    wait_for_indexer_admin || fail "Indexer startup did not expose its admin endpoint"
     while IFS= read -r repository; do
         response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 -X POST \
             -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/index/repositories/${repository}/ensure")" \
@@ -211,47 +232,56 @@ ensure_all_repositories() {
 }
 
 wait_for_compatible_manifests() {
-    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-query || fail "Query cannot start: schema-rebuild required"
+    "${COMPOSE[@]}" up -d --force-recreate --no-deps semantic-query \
+        || { printf 'deploy: Query cannot start: schema-rebuild required\n' >&2; return 1; }
     "${COMPOSE[@]}" --profile semantic-query-check run --rm semantic-query-probe \
-        || fail "Query did not observe compatible sealed manifests; run ./deploy.sh schema-rebuild"
+        || { printf 'deploy: Query did not observe compatible sealed manifests; run ./deploy.sh schema-rebuild\n' >&2; return 1; }
 }
 
 SCHEMA_REBUILD_POINTERS="${ROOT}/.runtime/schema-rebuild-pointers"
 
 record_current_pointers() {
     local repository token port response pointer
-    token="$(env_value SEMANTIC_QUERY_API_TOKEN)"
-    port="$(env_or_default SEMANTIC_HOST_PORT 8080)"
+    token="$(env_value SEMANTIC_INDEXER_ADMIN_TOKEN)"
+    port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
     rm -rf -- "${SCHEMA_REBUILD_POINTERS}"
     mkdir -p "${SCHEMA_REBUILD_POINTERS}"
     while IFS= read -r repository; do
         response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
-            -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/v1/repositories/${repository}")" \
-            || fail "could not record Query pointer for ${repository} before schema-rebuild"
-        pointer="$(jq -ce '{revision: .revision.value, generationId: .generationId.value, manifestDigest: .manifestDigest.value, committedJobId: .committedJobId.value, publishedAt: .publishedAt}' <<< "${response}")" \
-            || fail "Query returned an invalid publication pointer for ${repository}"
+            -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/index/repositories/${repository}/publication")" \
+            || fail "could not record Indexer publication for ${repository} before schema-rebuild"
+        pointer="$(jq -ce '.currentPointer // error("missing current pointer")' <<< "${response}")" \
+            || fail "Indexer returned an invalid publication pointer for ${repository}"
         printf '%s\n' "${pointer}" > "${SCHEMA_REBUILD_POINTERS}/${repository}.previous.json"
     done < <(configured_repositories)
 }
 
 rebuild_all_repositories() {
-    local repository token port response job_id status pointer
+    local repository token port response job_id pointer publication request previous_file rebuilt_file
     token="$(env_value SEMANTIC_INDEXER_ADMIN_TOKEN)"
     port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
     while IFS= read -r repository; do
+        previous_file="${SCHEMA_REBUILD_POINTERS}/${repository}.previous.json"
+        rebuilt_file="${SCHEMA_REBUILD_POINTERS}/${repository}.rebuilt.json"
+        request="$(jq -n -ce --slurpfile previous "${previous_file}" \
+            '{authorizeIncompatibleSchema:true, expectedCurrent: $previous[0]}')" || return 1
         response="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 30 -X POST \
             -H "X-Api-Token: ${token}" -H 'Content-Type: application/json' \
-            --data '{"authorizeIncompatibleSchema":true}' "http://127.0.0.1:${port}/index/repositories/${repository}/rebuild")" \
+            --data "${request}" "http://127.0.0.1:${port}/index/repositories/${repository}/rebuild")" \
             || return 1
         job_id="$(jq -er '.jobId' <<< "${response}")" || return 1
-        status="$(poll_index_job "${repository}" "${job_id}" "${token}" "${port}")" || return 1
-        pointer="$(jq -ce '.currentPointer // error("missing published pointer")' <<< "${status}")" || return 1
-        printf '%s\n' "${pointer}" > "${SCHEMA_REBUILD_POINTERS}/${repository}.rebuilt.json"
+        poll_index_job "${repository}" "${job_id}" "${token}" "${port}" >/dev/null || return 1
+        publication="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/index/repositories/${repository}/publication")" || return 1
+        pointer="$(jq -ce '.currentPointer // error("missing published pointer")' <<< "${publication}")" || return 1
+        printf '%s\n' "${pointer}" > "${rebuilt_file}"
+        jq -e --slurpfile previous "${previous_file}" \
+            '.currentPointer != null and .rollbackPointer == $previous[0]' <<< "${publication}" >/dev/null || return 1
     done < <(configured_repositories)
 }
 
 rollback_rebuilt_repositories() {
-    local rebuilt token port repository request response job_id
+    local rebuilt token port repository request response job_id publication
     token="$(env_value SEMANTIC_INDEXER_ADMIN_TOKEN)"
     port="$(env_or_default SEMANTIC_INDEXER_HOST_PORT 8081)"
     shopt -s nullglob
@@ -264,8 +294,46 @@ rollback_rebuilt_repositories() {
             "http://127.0.0.1:${port}/index/repositories/${repository}/rollback")" || return 1
         job_id="$(jq -er '.jobId' <<< "${response}")" || return 1
         poll_index_job "${repository}" "${job_id}" "${token}" "${port}" >/dev/null || return 1
+        publication="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 10 \
+            -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/index/repositories/${repository}/publication")" || return 1
+        jq -e --slurpfile previous "${SCHEMA_REBUILD_POINTERS}/${repository}.previous.json" --slurpfile rebuilt "${rebuilt}" \
+            '.currentPointer == $previous[0] and .rollbackPointer == $rebuilt[0]' <<< "${publication}" >/dev/null || return 1
     done
     shopt -u nullglob
+}
+
+capture_query_image() {
+    local required="$1" container image
+    container="$("${COMPOSE[@]}" ps -q semantic-query)"
+    if [[ -z "${container}" ]]; then
+        [[ "${required}" != true ]] || { printf 'deploy: schema-rebuild requires a running Query to preserve\n' >&2; return 1; }
+        return
+    fi
+    image="$(docker inspect --format '{{.Image}}' "${container}")" || return 1
+    docker image tag "${image}" "${QUERY_BACKUP_IMAGE}" || return 1
+    QUERY_BACKUP_CAPTURED=true
+}
+
+restore_previous_query() {
+    [[ "${QUERY_BACKUP_CAPTURED}" == true ]] || return 1
+    docker image tag "${QUERY_BACKUP_IMAGE}" java-agent-semantic-query:latest || return 1
+    "${COMPOSE[@]}" up -d --force-recreate --no-deps semantic-query || return 1
+    "${COMPOSE[@]}" --profile semantic-query-check run --rm semantic-query-probe || return 1
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || return 1
+    "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe || return 1
+}
+
+cleanup_query_backup() {
+    if [[ "${QUERY_BACKUP_CAPTURED}" == true ]]; then
+        docker image rm "${QUERY_BACKUP_IMAGE}" >/dev/null 2>&1 || true
+        QUERY_BACKUP_CAPTURED=false
+    fi
+}
+
+recover_schema_rebuild() {
+    "${COMPOSE[@]}" stop session-agent-runtime semantic-query >/dev/null 2>&1 || return 1
+    rollback_rebuilt_repositories || return 1
+    restore_previous_query
 }
 
 prepare_legacy_cutover_image() {
@@ -286,43 +354,81 @@ detect_legacy_cutover() {
 
 replace_legacy_after_query_ready() {
     [[ -n "${LEGACY_CONTAINER_ID}" ]] || { wait_for_compatible_manifests; return; }
-    docker stop "${LEGACY_CONTAINER_ID}" >/dev/null || fail "could not stop the exact legacy Semantic container"
+    docker stop "${LEGACY_CONTAINER_ID}" >/dev/null \
+        || { printf 'deploy: could not stop the exact legacy Semantic container\n' >&2; return 1; }
     if ! wait_for_compatible_manifests; then
         docker start "${LEGACY_CONTAINER_ID}" >/dev/null || restart_legacy_on_query_failure
-        fail "Query cutover failed; the exact legacy container was restored"
+        printf 'deploy: Query cutover failed; the exact legacy container was restored\n' >&2
+        return 1
     fi
-    docker rm "${LEGACY_CONTAINER_ID}" >/dev/null || fail "could not remove the successfully replaced legacy container"
+    docker rm "${LEGACY_CONTAINER_ID}" >/dev/null \
+        || { printf 'deploy: could not remove the successfully replaced legacy container\n' >&2; return 1; }
     LEGACY_CONTAINER_ID=""
 }
 
 normal_deploy() {
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres semantic-mongodb || fail "database startup failed"
     "${COMPOSE[@]}" --profile setup run --rm fixture-init || fail "fixture initialization failed"
-    bootstrap_schema
+    bootstrap_schema || fail "schema bootstrap failed"
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer startup failed"
     ensure_all_repositories
-    replace_legacy_after_query_ready
+    if ! replace_legacy_after_query_ready; then
+        if [[ -z "${LEGACY_CONTAINER_ID}" && "${QUERY_BACKUP_CAPTURED}" == true ]]; then
+            restore_previous_query || fail "Query update failed and the previous Query could not be restored"
+        fi
+        fail "Query update failed"
+    fi
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || fail "Runtime startup failed"
     "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe || fail "Runtime probe failed"
+    cleanup_query_backup
 }
 
 schema_rebuild() {
     record_current_pointers
-    "${COMPOSE[@]}" stop session-agent-runtime semantic-query || fail "could not quiesce Query and Runtime"
-    bootstrap_schema
-    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer startup failed"
-    if ! rebuild_all_repositories; then
-        rollback_rebuilt_repositories || fail "schema-rebuild failed and verified rollback could not complete"
-        fail "schema-rebuild failed; all rebuilt repository pointers were rolled back"
+    if ! "${COMPOSE[@]}" stop session-agent-runtime semantic-query semantic-indexer; then
+        restore_previous_query || fail "could not quiesce services or restore the previous Query"
+        fail "could not quiesce Query, Runtime, and Indexer"
     fi
-    replace_legacy_after_query_ready || { rollback_rebuilt_repositories; fail "schema-rebuild requires compatible sealed manifests"; }
-    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || { rollback_rebuilt_repositories; fail "Runtime failed after schema-rebuild"; }
+    if ! bootstrap_schema; then
+        recover_schema_rebuild || fail "schema bootstrap failed and the previous Query could not be restored"
+        fail "schema bootstrap failed; the previous Query was restored"
+    fi
+    if ! "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer \
+            || ! wait_for_indexer_admin; then
+        recover_schema_rebuild || fail "Indexer startup failed and the previous Query could not be restored"
+        fail "Indexer startup failed; the previous Query was restored"
+    fi
+    if ! rebuild_all_repositories; then
+        recover_schema_rebuild || fail "schema-rebuild failed and verified recovery could not complete"
+        fail "schema-rebuild failed; rebuilt pointers were rolled back and the previous Query was restored"
+    fi
+    if ! replace_legacy_after_query_ready; then
+        recover_schema_rebuild || fail "schema-rebuild Query failed and verified recovery could not complete"
+        fail "schema-rebuild requires compatible sealed manifests; the previous Query was restored"
+    fi
+    if ! "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime \
+            || ! "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe; then
+        recover_schema_rebuild || fail "Runtime failed after schema-rebuild and verified recovery could not complete"
+        fail "Runtime failed after schema-rebuild; rebuilt pointers were rolled back and the previous stack was restored"
+    fi
+    cleanup_query_backup
 }
 
 reset_deploy() {
     printf 'deploy: RESET WILL DELETE ALL NAMED VOLUMES.\n' >&2
     "${COMPOSE[@]}" down --remove-orphans --volumes || fail "reset teardown failed"
-    normal_deploy
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres semantic-mongodb \
+        || fail "database startup failed"
+    "${COMPOSE[@]}" --profile setup run --rm fixture-init || fail "fixture initialization failed"
+    bootstrap_schema || fail "schema bootstrap failed"
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer startup failed"
+    ensure_all_repositories
+    "${COMPOSE[@]}" stop semantic-indexer || fail "could not stop Indexer before cold Query startup"
+    wait_for_compatible_manifests || fail "cold Query did not observe compatible sealed manifests"
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer restart failed"
+    wait_for_indexer_admin || fail "restarted Indexer did not expose its admin endpoint"
+    "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || fail "Runtime startup failed"
+    "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe || fail "Runtime probe failed"
 }
 
 main() {
@@ -340,7 +446,7 @@ main() {
     runtime_url="$(env_or_default SESSION_AGENT_GIT_URL git@github.com:ChouKevin/session-agent-runtime.git)"
     runtime_ref="$(env_or_default SESSION_AGENT_GIT_REF main)"
     semantic_url="$(env_or_default SEMANTIC_GIT_URL git@github.com:ChouKevin/java-code-intelligence.git)"
-    semantic_ref="$(env_or_default SEMANTIC_GIT_REF uat)"
+    semantic_ref="$(env_or_default SEMANTIC_GIT_REF main)"
     export STARTER_ROOT="${ROOT}"
     COMPOSE=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
     prepare_sources "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}"
@@ -348,6 +454,11 @@ main() {
     if [[ -n "${LEGACY_CONTAINER_ID}" ]]; then
         prepare_legacy_cutover_image "${semantic_url}" "$(env_or_default SEMANTIC_LEGACY_REF 366f870c269df27a22ab26e4becdc08359573ff1)"
     fi
+    case "${mode}" in
+        normal) capture_query_image false || fail "could not preserve the current Query image" ;;
+        schema-rebuild) capture_query_image true || fail "could not preserve the current Query image" ;;
+        reset) ;;
+    esac
     "${COMPOSE[@]}" build semantic-mongo-init semantic-indexer semantic-query session-agent-runtime || fail "image build failed"
     validate_deployment_sources
     case "${mode}" in

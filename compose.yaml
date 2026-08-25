@@ -65,7 +65,12 @@ services:
       SEMANTIC_MONGO_BOOTSTRAP_PASSWORD: ${SEMANTIC_MONGO_BOOTSTRAP_PASSWORD:?required}
       SEMANTIC_MONGO_INDEXER_PASSWORD: ${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}
       SEMANTIC_MONGO_QUERY_PASSWORD: ${SEMANTIC_MONGO_QUERY_PASSWORD:?required}
-    entrypoint: ["mongosh", "--quiet", "--host", "semantic-mongodb", "--username", "$$SEMANTIC_MONGO_ROOT_USERNAME", "--password", "$$SEMANTIC_MONGO_ROOT_PASSWORD", "--authenticationDatabase", "admin", "--file", "/config/mongo-init.js"]
+    entrypoint: ["/bin/sh", "-ec"]
+    command: >-
+      exec mongosh --quiet --host semantic-mongodb
+      --username "$$SEMANTIC_MONGO_ROOT_USERNAME"
+      --password "$$SEMANTIC_MONGO_ROOT_PASSWORD"
+      --authenticationDatabase admin --file /config/mongo-init.js
     volumes:
       - ${STARTER_ROOT}/config/mongo-init.js:/config/mongo-init.js:ro
     restart: "no"
