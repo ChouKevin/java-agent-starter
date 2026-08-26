@@ -78,8 +78,8 @@ fixture_git() {
 fixture_commit_and_tag() {
     local checkout="$1" message="$2" tag="$3"
     fixture_git -C "${checkout}" add --all
-    fixture_git -C "${checkout}" commit --quiet --message "${message}"
-    fixture_git -C "${checkout}" tag --annotate --message "${tag}" "${tag}"
+    fixture_git -C "${checkout}" commit --quiet --no-gpg-sign --message "${message}"
+    fixture_git -C "${checkout}" tag --annotate --no-sign --message "${tag}" "${tag}"
 }
 
 fixture_validate_remote() {

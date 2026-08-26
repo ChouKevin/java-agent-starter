@@ -7,6 +7,7 @@ TEMPORARY_DIRECTORY="$(mktemp -d)"
 trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 
 [[ -d "${SEMANTIC_FIXTURES}" ]] || { printf 'Semantic UAT fixture source is unavailable\n' >&2; exit 1; }
+grep -Fq '${STARTER_ROOT}/.runtime/sources/java-code-intelligence/semantic-indexer/fixtures/uat/payment-service' "${ROOT}/compose.yaml"
 semantic_before="$(git -C "$(dirname -- "$(dirname -- "${SEMANTIC_FIXTURES}")")" status --porcelain)"
 
 run_fixture() {
@@ -17,7 +18,8 @@ run_fixture() {
 
 first_root="${TEMPORARY_DIRECTORY}/first"
 second_root="${TEMPORARY_DIRECTORY}/second"
-mkdir -p "${first_root}" "${second_root}"
+signed_default_root="${TEMPORARY_DIRECTORY}/signed-default"
+mkdir -p "${first_root}" "${second_root}" "${signed_default_root}"
 run_fixture "${first_root}" prepare
 
 tag_sha() { git --git-dir="$1/.runtime/uat-git/$2.git" rev-parse "$3"; }
@@ -43,6 +45,10 @@ run_fixture "${second_root}" prepare
 for repository in order-service video-service; do
     [[ "$(tag_sha "${second_root}" "${repository}" v1)" == "$(tag_sha "${first_root}" "${repository}" v1)" ]]
 done
+GIT_CONFIG_COUNT=2 GIT_CONFIG_KEY_0=commit.gpgSign GIT_CONFIG_VALUE_0=true \
+    GIT_CONFIG_KEY_1=tag.gpgSign GIT_CONFIG_VALUE_1=true run_fixture "${signed_default_root}" prepare
+[[ "$(tag_sha "${signed_default_root}" payment-service v1)" == "${v1_payment}" ]]
+[[ "$(tag_sha "${signed_default_root}" payment-service v2)" == "${v2_payment}" ]]
 
 order_before="$(main_sha "${first_root}" order-service)"
 video_before="$(main_sha "${first_root}" video-service)"
