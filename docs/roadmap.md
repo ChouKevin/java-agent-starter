@@ -1,44 +1,30 @@
 # Cross-Service Integration Roadmap
 
-This roadmap records ownership and acceptance boundaries for the Session Agent
-Runtime, Semantic Service, and Starter composition. Repository-internal design
-and implementation remain in the repository that owns the behavior.
-
 ## Ownership
 
-- Session Agent Runtime: conversation, tool loop, citations, persistence, live acceptance
-- Semantic: repository catalog and source analysis APIs
-- Starter: source checkout, Compose lifecycle, health/smoke orchestration, deployment record
+- **Session Agent Runtime:** conversation history, model/tool loop, feedback, citations, PostgreSQL persistence, HTTP API, and live model scenarios.
+- **Semantic:** repository catalog, exact Git indexing, JDT LS analysis, Mongo generations, and read-only source/query APIs.
+- **Starter:** exact source staging, deterministic Git remotes, Compose lifecycle, deployment record, and cross-service UAT orchestration.
 
-The Runtime owns its dedicated PostgreSQL database and consumes Semantic through
-its network API. The Starter must not add Runtime Java source, duplicate Semantic
-schemas, or implement conversation, tool, citation, or persistence behavior.
+Starter must not add Runtime Java source, duplicate Semantic schemas, or implement conversation, citation, index, or persistence behavior.
 
-## Runtime cutover
+## Current UAT boundary
 
-**Status:** In progress
+Starter deploys independent Runtime and Semantic source SHAs from `.runtime/sources/` and records the pair in `deployment-record.txt`. Runtime listens on loopback port `8090`; the Semantic Query gateway listens on loopback port `8080`; Indexer admin uses loopback port `8081`. Internal networks keep Runtime away from the Indexer admin path.
 
-Starter deploys independent Runtime and Semantic checkouts from
-`.runtime/sources/`, records their exact SHAs, and keeps both host ports on
-loopback by default: Runtime `8090`, Semantic `8080`. Compose fixture setup and
-network probes are Starter operational concerns, not Runtime product source.
-
-Live acceptance belongs to the Runtime repository. Starter invokes the external
-`SessionAgentLiveIT` only after deployment, passing the configured loopback URLs,
-Semantic token, Google key, and model through its process environment without
-logging credentials.
-
-Slack settings are reserved deployment inputs. They do not represent an
-implemented Starter or Runtime integration milestone.
+The complete `runtime-uat.sh` flow proves one Indexer, Mongo-only cold Query, exact Git fixture revisions, two payment `v1` to `v2` transitions, stale-revision feedback and model retry in one persisted session, five business-answer scenarios, reset isolation, safe evidence, and profile cleanup.
 
 ## Acceptance rules
 
-- A deployment records immutable Runtime and Semantic source SHAs.
-- Runtime live acceptance runs against the deployed loopback services.
-- Semantic repository/source APIs remain the only repository analysis boundary.
-- The Runtime database is independent from Semantic repository and JDT state.
-- A one-time legacy shutdown is an operator procedure after replacement images
-  have been built and the current deployment has been validated; it is not a
-  `deploy.sh` mode or compatibility path.
-- No compatibility layer is retained unless a later milestone explicitly
-  approves one.
+- Each deployment records immutable Runtime and Semantic source SHAs.
+- Only one outer Starter operation owns the deployment lock.
+- Semantic fixture source stays in Semantic; Starter creates only disposable Git remotes.
+- Session has its own PostgreSQL data and never owns Semantic Git, JDT, Mongo, or fixture state.
+- Normal deployment keeps named volumes; only explicit `reset` deletes the disposable UAT volumes.
+- There is no legacy deployment or compatibility mode.
+
+## Deferred
+
+- Production TLS, secret-store, backup, and monitoring design beyond this single-host UAT.
+- More than one Indexer process or distributed dispatcher ownership.
+- Slack transport; current Slack environment values are reserved inputs only.

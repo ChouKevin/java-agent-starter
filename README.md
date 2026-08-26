@@ -1,126 +1,103 @@
 # Java Agent Starter
 
-Single-host UAT deployment for the externally published Session Agent Runtime,
-Semantic Service, and the Runtime's dedicated PostgreSQL database. The Starter
-contains no Runtime source: it owns source checkout, Compose lifecycle, probes,
-and the deployment record only.
+Java Agent Starter runs a single-host UAT stack for three independently owned parts:
 
-Cross-service ownership and acceptance milestones are in
-[`docs/roadmap.md`](docs/roadmap.md).
+- Session Agent Runtime and its PostgreSQL database;
+- Semantic Indexer, Semantic Query, and MongoDB;
+- Starter scripts that stage source, build images, control Compose, create Git fixtures, and run acceptance.
 
-## Start
+Starter contains no Session Runtime or Semantic Java source. Cross-service ownership is summarized in [docs/roadmap.md](docs/roadmap.md).
 
-Requirements: Git, Docker Engine with Compose v2, SSH access to the Runtime and
-Semantic repositories, and a Google API key. Running `runtime-uat.sh` also
-requires Maven and JDK 21 installed at `/usr/lib/jvm/java-21-openjdk-amd64`, the
-path used by the script. On an initial deployment, let `deploy.sh` create `.env`
-with local Semantic and PostgreSQL secrets. It stops until `GOOGLE_API_KEY` is
-set; add that key to `.env` and rerun it.
+## Requirements and first start
+
+Install Git, Docker Engine with Compose v2, `jq`, `flock`, Maven, and Java 21. The live script currently uses `/usr/lib/jvm/java-21-openjdk-amd64`. Source Git credentials and a Google GenAI key are required when their configured remotes or live tests need them.
 
 ```bash
 git clone git@github.com:ChouKevin/java-agent-starter.git
 cd java-agent-starter
 ./deploy.sh
-# Set GOOGLE_API_KEY in the generated .env, then rerun.
+# Fill the required blank values in the generated .env, then run again.
 ./deploy.sh
 ```
 
-> **Warning — disposable UAT:** Every `./deploy.sh` invocation (including the
-> deployment performed by `./runtime-uat.sh`) removes the fixed
-> `java-agent-uat` Compose project's PostgreSQL, payment fixture, order fixture,
-> Semantic repository cache, and JDT workspace cache volumes. Never point
-> Starter at live or production data.
+`.env`, `.runtime/**`, generated fixture repositories, Compose data, evidence, and `deployment-record.txt` are local and untracked. Never commit credentials or runtime evidence.
 
-`./deploy.sh` rebuilds and recreates the disposable UAT project. It stages the
-configured Runtime and Semantic sources under `.runtime/sources/`, builds both
-images, removes the existing project and its volumes, initializes the Runtime
-fixtures, starts PostgreSQL, then verifies Semantic before starting and probing
-Runtime. It records the exact Runtime and Semantic source SHAs in
-`deployment-record.txt`.
+Starter stages the configured Session and Semantic branches under `.runtime/sources/`. It resolves each remote branch first, clones to operation-owned `.staging.*` directories, validates both sources before promotion, and cleans those temporary directories on success or failure. `deployment-record.txt` records the exact source SHAs used for the deployment.
 
-The Runtime and Semantic checkouts are one deployment pair. Later runs accept
-only clean checkouts on the configured branches and advance them by
-fast-forward; the recorded SHAs identify the exact pair used by that UAT run.
-Source staging is validated before either checkout is promoted.
+## Deployment modes
 
-The Runtime target must contain
-`a78f1df8f2d4a4dc2e0ea7d80a5d4260f93053ee`, which switches its Semantic
-authentication to `X-Api-Token`. The default remote `main` currently does not
-contain that commit, so deployment safely stops before changing either managed
-checkout or the Compose project until the commit is integrated. For local UAT,
-set `SESSION_AGENT_GIT_URL=/home/shuu/session-agent-runtime` in `.env`; that
-checkout currently contains the required commit.
+```bash
+./deploy.sh                 # normal update; keep named database/workspace volumes
+./deploy.sh schema-rebuild  # rebuild repository generations before updating Query
+./deploy.sh reset           # disposable UAT reset; delete all named volumes
+```
 
-If a deployment fails after the existing project has been reset, it may leave a
-partial project. The supported recovery is to rerun `./deploy.sh` from the
-beginning; no alternate recovery procedure is supported.
+Every public mutating command takes `.runtime/deploy.lock` once for its complete operation. Sourced helpers do not take another lock. A second deploy, fixture change, or UAT run fails fast while the lock is held.
 
-The Runtime is published only on loopback port `8090` by default; Semantic is on
-loopback port `8080`. This is plain HTTP for a trusted firewall/VPN only; do not
-expose it to an untrusted network without a separate TLS and security design.
+Before any deploy starts a new Indexer, Starter stops the existing Compose stack and verifies that no old Indexer remains. The stack has exactly one `semantic-indexer` service. Query is a separate Mongo-only service and Runtime can reach only Query, not the Indexer admin network.
+
+`reset` is destructive and is only for the fixed disposable `java-agent-uat` project. It checks `SEMANTIC_DISPOSABLE_UAT=true`, prints a warning, removes the project's named volumes, recreates the `semantic_uat` database, publishes all configured repositories, proves Query works while Indexer is stopped, then restarts Indexer and Runtime. Never point this Compose file at production data.
+
+## Deterministic Git fixtures
+
+The source fixture files belong to Semantic under `semantic-indexer/fixtures/uat`. Starter copies that source into deterministic local bare repositories under `.runtime/uat-git/`; it does not copy fixture source into Session Runtime.
+
+```bash
+./fixture.sh prepare
+./fixture.sh status
+./fixture.sh use payment-service v2
+./fixture.sh use payment-service v1
+./fixture.sh reset payment-service
+```
+
+`prepare` creates payment, order, and video remotes with stable `v1` tags; payment also has `v2`. `use` changes only the selected remote's `main` ref. `reset` changes that repository back to peeled `v1`, submits a UAT `RESET` job, republishes it, and checks the exact revision. Fixture commands validate their repository/tag arguments and stay inside `.runtime/uat-git`.
 
 ## Live acceptance
+
+Run the full functional proof with:
 
 ```bash
 ./runtime-uat.sh
 ```
 
-`./runtime-uat.sh` performs the same disposable deployment first, then runs the
-bounded external `SessionAgentLiveIT` selected from the checked-out Runtime
-`pom.xml`. It derives loopback Runtime and Semantic URLs from
-`SESSION_AGENT_HOST_PORT` and `SEMANTIC_HOST_PORT`, forwards the Semantic token,
-Google key, and configured model through the process environment, and does not
-print their values. This documents what the command does; it does not claim that
-LiveIT has run or succeeded.
+One outer lock covers the whole run. The script:
 
-The Runtime's public pre-success probe is health-only; its existing public
-Semantic calls occur through the conversation/tool flow and can require model
-execution. Starter therefore cannot add a model-independent Runtime-to-Semantic
-authenticated success operation without changing Runtime. The existing
-authenticated Semantic probe and the required Runtime commit gate are the UAT
-checks before LiveIT; the Runtime-to-Semantic operation remains covered by
-LiveIT.
+1. exports the `uat` Semantic profile and performs a clean `deploy.sh reset`;
+2. publishes payment, order, and video at exact `v1` commits;
+3. records a repository catalog in one persisted Session conversation;
+4. stops Indexer and exercises every Query tool family from MongoDB;
+5. rebuilds payment at the same revision;
+6. pauses payment `v2` before publication, proves `v1` stays visible, releases it, and checks exact `v2` plus typed `REVISION_OUTDATED` feedback for `v1`;
+7. lets the model retry with `v2` in the same conversation and runs five business scenarios;
+8. resets payment to `v1` without changing order or video, then repeats the full `v1` to `v2` transition.
 
-Before `SessionAgentLiveIT`, the command runs `semantic-index-uat.sh` exactly
-once while retaining the same deployment lock. That acceptance explicitly
-resets only disposable UAT data, starts the Indexer UAT profile
-(`SEMANTIC_UAT_PROFILE=uat`) for its pre-publication pause control, and leaves
-the final cold Query/MongoDB state available to LiveIT. The UAT profile is
-empty by default and is not enabled by normal deployments.
+The five model scenarios cover payment methods, a runtime-only fee value, video formats, behavior absent from code, and an order cancellation flow whose refund behavior is not proven. They test honest limits as well as positive answers.
 
-The Runtime owns the conversation and tool loop, citations, persistence, live
-acceptance, and its dedicated database. It uses Semantic for repository/source
-analysis and Google for model access. Slack values in `.env` are reserved
-deployment inputs only; no Slack integration is implemented here.
+Semantic evidence is under `.runtime/evidence/semantic-git-uat/`. The Session safe live report is under `.runtime/sources/session-agent-runtime/target/live-reports/`. Evidence contains IDs, revisions, generation IDs, state, tool order, citations, outcomes, and available usage only. It must not contain credentials, source payloads, questions, prompts, raw model context, HTTP bodies, or full tool results.
 
-## Add a repository for analysis
+## Add a repository
 
-1. Add an entry under `semantic.repositories` in
-   `config/semantic-repositories.yml`. Keep credentials out of this file.
-2. Run `./deploy.sh` so Semantic restarts with the updated catalog.
-3. Explicitly clone the catalog entry and read its current revision:
+Add its Git `url` and `defaultBranch` to `config/semantic-repositories.yml`, then deploy and submit an ordinary ensure job:
 
 ```bash
+./deploy.sh
 ./repository.sh list
 ./repository.sh ensure my-service
 ./repository.sh revision my-service
 ```
 
-Catalog membership alone never clones a source repository. The returned
-`currentRevision` is the revision every later Semantic query must carry. For
-private catalog repositories, set `GIT_USERNAME` and `GIT_TOKEN` in `.env`.
+The returned revision is the exact value later Semantic queries must carry. Catalog membership alone does not index a repository. Keep private Git credentials only in `.env`.
 
-## Operations
+## Inspect and clean the UAT stack
 
 ```bash
 export STARTER_ROOT="$PWD"
 alias uat='docker compose --project-name java-agent-uat --env-file .env -f compose.yaml'
 uat ps
-uat logs -f session-agent-runtime
-uat logs -f semantic-service
+uat logs -f semantic-indexer semantic-query session-agent-runtime
+
+# Destructive: remove only this disposable project's containers and named volumes.
+uat --profile uat-evidence down --remove-orphans --volumes
 ```
 
-Runtime checkouts, Compose data, `.env`, and the deployment record are
-intentionally untracked. To test another source revision, change its `*_GIT_URL`
-or `*_GIT_REF` values before the first deploy or remove only its clean checkout
-under `.runtime/sources/`.
+Profile containers such as the model-egress canary are included in Starter teardown, so their containers and networks do not survive a reset.
