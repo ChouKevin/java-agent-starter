@@ -128,11 +128,11 @@ validate_staged_source() {
 promote_staged_source() {
     local destination="$1" staging="$2"
     if [[ -e "${destination}" ]]; then
-        mv "${destination}" "${destination}.previous"
-        mv "${staging}" "${destination}"
-        rm -rf -- "${destination}.previous"
+        mv "${destination}" "${destination}.previous" || return 1
+        mv "${staging}" "${destination}" || return 1
+        rm -rf -- "${destination}.previous" || return 1
     else
-        mv "${staging}" "${destination}"
+        mv "${staging}" "${destination}" || return 1
     fi
 }
 
@@ -147,8 +147,10 @@ prepare_sources() {
     STAGING_DIRECTORIES+=("${semantic_staging%/*}")
     validate_staged_source "Session Agent Runtime" "${runtime_url}" "${runtime_ref}" "${SOURCES_DIR}/session-agent-runtime" "${runtime_staging}"
     validate_staged_source "Semantic" "${semantic_url}" "${semantic_ref}" "${SOURCES_DIR}/java-code-intelligence" "${semantic_staging}"
-    promote_staged_source "${SOURCES_DIR}/session-agent-runtime" "${runtime_staging}"
-    promote_staged_source "${SOURCES_DIR}/java-code-intelligence" "${semantic_staging}"
+    promote_staged_source "${SOURCES_DIR}/session-agent-runtime" "${runtime_staging}" \
+        || fail "Session Agent Runtime source could not be promoted"
+    promote_staged_source "${SOURCES_DIR}/java-code-intelligence" "${semantic_staging}" \
+        || fail "Semantic source could not be promoted"
     cleanup_staging_directories
     DEPLOYMENT_RUNTIME_URL="${runtime_url}"
     DEPLOYMENT_RUNTIME_REF="${runtime_ref}"

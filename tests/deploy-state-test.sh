@@ -101,3 +101,18 @@ if find "${SOURCES_DIR}" -maxdepth 1 -type d -name '.staging.*' -print -quit | g
     printf 'failed source staging left a staging directory behind\n' >&2
     exit 1
 fi
+
+printf 'promotion blocker\n' > "${SOURCES_DIR}/session-agent-runtime.previous"
+if bash -c 'source "$1/deploy.sh"; SOURCES_DIR="$2"; REQUIRED_RUNTIME_COMMIT=""; prepare_sources "$3" main "$4" main' \
+    bash "${STARTER_SCRIPT_ROOT}" "${SOURCES_DIR}" "${TEMPORARY_DIRECTORY}/runtime.git" "${TEMPORARY_DIRECTORY}/semantic.git"; then
+    printf 'source promotion unexpectedly succeeded with an occupied previous path\n' >&2
+    exit 1
+fi
+[[ -d "${SOURCES_DIR}/session-agent-runtime/.git" ]]
+[[ "$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)" == "${runtime_before}" ]]
+[[ -f "${SOURCES_DIR}/session-agent-runtime.previous" ]]
+if find "${SOURCES_DIR}" -maxdepth 1 -type d -name '.staging.*' -print -quit | grep -q .; then
+    printf 'failed source promotion left a staging directory behind\n' >&2
+    exit 1
+fi
+rm -f -- "${SOURCES_DIR}/session-agent-runtime.previous"
