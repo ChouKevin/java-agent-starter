@@ -35,23 +35,18 @@ env_or_default() {
     [[ -n "${configured}" ]] && printf '%s' "${configured}" || printf '%s' "$2"
 }
 
-acquire_deploy_lock() {
-    if [[ "${STARTER_DEPLOY_LOCK_FD:-}" =~ ^[0-9]+$ && -e "/proc/$$/fd/${STARTER_DEPLOY_LOCK_FD}" ]]; then
-        local inherited_target expected_target
-        inherited_target="$(readlink -f "/proc/$$/fd/${STARTER_DEPLOY_LOCK_FD}")" || fail "inherited deployment lock is unavailable"
-        expected_target="$(readlink -f "${DEPLOY_LOCK_FILE}")" || fail "deployment lock path is unavailable"
-        [[ "${inherited_target}" == "${expected_target}" ]] \
-            || fail "inherited deployment lock is not ${DEPLOY_LOCK_FILE}"
-        flock -n "${STARTER_DEPLOY_LOCK_FD}" || fail "inherited deployment lock is not held"
-        DEPLOY_LOCK_FD="${STARTER_DEPLOY_LOCK_FD}"
-        export STARTER_DEPLOY_LOCK_FD
-        return
-    fi
+with_deploy_lock() {
+    local operation_lock_fd status
     mkdir -p "${ROOT}/.runtime"
-    exec {DEPLOY_LOCK_FD}>"${DEPLOY_LOCK_FILE}"
-    flock -n "${DEPLOY_LOCK_FD}" || fail "another starter deployment holds ${DEPLOY_LOCK_FILE}"
-    STARTER_DEPLOY_LOCK_FD="${DEPLOY_LOCK_FD}"
-    export STARTER_DEPLOY_LOCK_FD
+    exec {operation_lock_fd}>"${DEPLOY_LOCK_FILE}"
+    flock -n "${operation_lock_fd}" || fail "another starter deployment holds ${DEPLOY_LOCK_FILE}"
+    if "$@"; then
+        status=0
+    else
+        status=$?
+    fi
+    exec {operation_lock_fd}>&-
+    return "${status}"
 }
 
 create_env_if_missing() {
@@ -155,7 +150,7 @@ prepare_sources() {
     DEPLOYMENT_SEMANTIC_TARGET_SHA="$(git -C "${SOURCES_DIR}/java-code-intelligence" rev-parse HEAD)"
     local fixture
     for fixture in payment-service order-service video-service; do
-        [[ -f "${SOURCES_DIR}/java-code-intelligence/fixtures/uat/${fixture}/pom.xml" ]] || fail "Semantic UAT fixture is missing: ${fixture}"
+        [[ -f "${SOURCES_DIR}/java-code-intelligence/semantic-indexer/fixtures/uat/${fixture}/pom.xml" ]] || fail "Semantic UAT fixture is missing: ${fixture}"
     done
 }
 
@@ -479,16 +474,19 @@ reset_deploy() {
     "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe || fail "Runtime probe failed"
 }
 
-main() {
-    local mode="${1:-normal}" runtime_url runtime_ref semantic_url semantic_ref
+validate_deploy_arguments() {
+    local mode="${1:-normal}"
     [[ "$#" -le 1 ]] || fail "usage: ./deploy.sh [schema-rebuild|reset]"
     case "${mode}" in normal|schema-rebuild|reset) ;; *) fail "usage: ./deploy.sh [schema-rebuild|reset]" ;; esac
+}
+
+deploy_impl() {
+    local mode="$1" runtime_url runtime_ref semantic_url semantic_ref
     command -v git >/dev/null 2>&1 || fail "git is required"
     command -v docker >/dev/null 2>&1 || fail "docker is required"
     command -v jq >/dev/null 2>&1 || fail "jq is required"
     command -v flock >/dev/null 2>&1 || fail "flock is required"
     docker compose version >/dev/null 2>&1 || fail "docker compose is required"
-    acquire_deploy_lock
     create_env_if_missing
     assert_required_secrets
     [[ "$(env_or_default SEMANTIC_DISPOSABLE_UAT false)" == true ]] \
@@ -521,4 +519,9 @@ main() {
     printf 'deploy: offline Semantic index services started\n'
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi
+deploy_main() {
+    validate_deploy_arguments "$@"
+    with_deploy_lock deploy_impl "${1:-normal}"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then deploy_main "$@"; fi

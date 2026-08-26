@@ -1,5 +1,7 @@
 .env
 .runtime/
+# Deterministic local UAT remotes are generated beneath .runtime/uat-git.
+.runtime/uat-git/
 backups/
 data/
 deployment-record.txt

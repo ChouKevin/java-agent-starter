@@ -7,6 +7,7 @@ ENV_FILE="${ROOT}/.env"
 RUNTIME_SOURCE="${ROOT}/.runtime/sources/session-agent-runtime"
 
 source "${ROOT}/deploy.sh"
+source "${ROOT}/semantic-index-uat.sh"
 
 runtime_uat_fail() {
     printf 'runtime-uat: %s\n' "$*" >&2
@@ -34,17 +35,15 @@ env_or_default() {
     fi
 }
 
-runtime_uat_main() {
+runtime_uat_impl() {
     local semantic_token
     local google_key
     local model
     local runtime_port
     local semantic_port
 
-    [[ "$#" -eq 0 ]] || runtime_uat_fail "usage: ./runtime-uat.sh"
-    acquire_deploy_lock
     export SEMANTIC_UAT_PROFILE=uat
-    "${ROOT}/semantic-index-uat.sh"
+    semantic_index_uat_impl
     [[ -f "${RUNTIME_SOURCE}/pom.xml" ]] || runtime_uat_fail "Session Agent Runtime source is unavailable"
 
     semantic_token="$(env_value SEMANTIC_QUERY_API_TOKEN)"
@@ -64,6 +63,12 @@ runtime_uat_main() {
 
     JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
         mvn -q -f "${RUNTIME_SOURCE}/pom.xml" -Dtest=SessionAgentLiveIT test
+}
+
+runtime_uat_main() {
+    [[ "$#" -eq 0 ]] || runtime_uat_fail "usage: ./runtime-uat.sh"
+    command -v jq >/dev/null 2>&1 || runtime_uat_fail "jq is required"
+    with_deploy_lock runtime_uat_impl
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

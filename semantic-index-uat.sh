@@ -5,9 +5,10 @@ set -euo pipefail
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ENV_FILE="${ROOT}/.env"
 LOG_DIRECTORY="${ROOT}/.runtime/uat-logs"
-DEPLOY_LOCK_FILE="${ROOT}/.runtime/deploy.lock"
 STARTUP_WAIT_SECONDS="${SEMANTIC_UAT_WAIT_SECONDS:-240}"
 COMPOSE=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
+
+source "${ROOT}/deploy.sh"
 
 uat_fail() { printf 'semantic-index-uat: %s\n' "$*" >&2; exit 1; }
 
@@ -15,16 +16,6 @@ env_value() {
     local line
     line="$(grep -m1 -E "^$1=" "${ENV_FILE}" 2>/dev/null || true)"
     printf '%s' "${line#*=}"
-}
-
-assert_deployment_lock() {
-    local target expected
-    [[ "${STARTER_DEPLOY_LOCK_FD:-}" =~ ^[0-9]+$ && -e "/proc/$$/fd/${STARTER_DEPLOY_LOCK_FD}" ]] \
-        || uat_fail "must run inside the deployment lifecycle with STARTER_DEPLOY_LOCK_FD"
-    expected="$(readlink -f "${DEPLOY_LOCK_FILE}")" || uat_fail "deployment lock path is unavailable"
-    target="$(readlink -f "/proc/$$/fd/${STARTER_DEPLOY_LOCK_FD}")" || uat_fail "inherited deployment lock is unavailable"
-    [[ "${target}" == "${expected}" ]] || uat_fail "inherited deployment lock is not ${DEPLOY_LOCK_FILE}"
-    flock -n "${STARTER_DEPLOY_LOCK_FD}" || uat_fail "inherited deployment lock is not held"
 }
 
 safe_log() { printf '%s\n' "$*" >> "${LOG_DIRECTORY}/semantic-index-uat.log"; }
@@ -225,14 +216,10 @@ run_incremental_publication() {
     submit_and_wait payment-service ensure >/dev/null
 }
 
-semantic_index_uat_main() {
-    [[ "$#" -eq 0 ]] || uat_fail "usage: ./semantic-index-uat.sh"
-    command -v jq >/dev/null 2>&1 || uat_fail "jq is required"
-    assert_deployment_lock
+semantic_index_uat_impl() {
     mkdir -p "${LOG_DIRECTORY}"
     : > "${LOG_DIRECTORY}/semantic-index-uat.log"
-    # reset is intentionally explicit and guarded by the inherited deployment lifecycle.
-    "${ROOT}/deploy.sh" reset
+    deploy_impl reset
     assert_split_cutover_volumes
     "${COMPOSE[@]}" --profile uat-evidence up -d model-egress-canary || uat_fail "model-egress canary did not start"
     local payment_revision order_revision video_revision
@@ -250,6 +237,12 @@ semantic_index_uat_main() {
     restart_indexer
     run_incremental_publication
     safe_log "semantic cold Query acceptance complete"
+}
+
+semantic_index_uat_main() {
+    [[ "$#" -eq 0 ]] || uat_fail "usage: ./semantic-index-uat.sh"
+    command -v jq >/dev/null 2>&1 || uat_fail "jq is required"
+    with_deploy_lock semantic_index_uat_impl
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

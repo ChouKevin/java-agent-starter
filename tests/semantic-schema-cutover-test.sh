@@ -15,7 +15,7 @@ grep -Fq 'capture_query_image' "${ROOT}/deploy.sh"
 grep -Fq 'restore_previous_query' "${ROOT}/deploy.sh"
 grep -Fq 'recover_schema_rebuild' "${ROOT}/deploy.sh"
 grep -Fq 'schema-rebuild requires compatible sealed manifests' "${ROOT}/deploy.sh"
-main_block="$(awk '/main\(\)/,/^}/' "${ROOT}/deploy.sh")"
+main_block="$(awk '/deploy_impl\(\)/,/^}/' "${ROOT}/deploy.sh")"
 capture_line="$(grep -n 'capture_query_image' <<< "${main_block}" | tail -n1 | cut -d: -f1)"
 build_line="$(grep -n 'build semantic-mongo-init' <<< "${main_block}" | cut -d: -f1)"
 [[ -n "${capture_line}" && -n "${build_line}" && "${capture_line}" -lt "${build_line}" ]]

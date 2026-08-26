@@ -34,17 +34,15 @@ EOF
 cat > "${FAKE_STARTER}/deploy.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-main() {
-    [[ "\$#" -eq 0 ]]
+with_deploy_lock() {
     mkdir -p '${FAKE_STARTER}/.runtime'
     exec {DEPLOY_LOCK_FD}>'${FAKE_STARTER}/.runtime/deploy.lock'
     flock -n "\${DEPLOY_LOCK_FD}"
-    printf 'deploy\n' >> '${CALL_LOG}'
+    "\$@"
 }
-acquire_deploy_lock() {
-    main
-    STARTER_DEPLOY_LOCK_FD="\${DEPLOY_LOCK_FD}"
-    export STARTER_DEPLOY_LOCK_FD
+deploy_impl() {
+    [[ "\$#" -eq 1 && "\$1" == reset ]]
+    printf 'deploy\n' >> '${CALL_LOG}'
 }
 EOF
 chmod +x "${FAKE_STARTER}/deploy.sh"
@@ -52,9 +50,11 @@ chmod +x "${FAKE_STARTER}/deploy.sh"
 cat > "${FAKE_STARTER}/semantic-index-uat.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\${STARTER_DEPLOY_LOCK_FD}" =~ ^[0-9]+$ ]]
-[[ "\${SEMANTIC_UAT_PROFILE}" == uat ]]
-printf 'semantic\n' >> '${CALL_LOG}'
+semantic_index_uat_impl() {
+    [[ "\${SEMANTIC_UAT_PROFILE}" == uat ]]
+    deploy_impl reset
+    printf 'semantic\n' >> '${CALL_LOG}'
+}
 EOF
 chmod +x "${FAKE_STARTER}/semantic-index-uat.sh"
 
@@ -90,6 +90,24 @@ grep -Fq 'usage: ./runtime-uat.sh' "${OUTPUT_LOG}"
     printf 'runtime UAT deployed before rejecting a positional argument\n' >&2
     exit 1
 }
+
+(
+    exec 9>"${FAKE_STARTER}/.runtime/deploy.lock"
+    flock -n 9
+    touch "${FAKE_STARTER}/lock-ready"
+    sleep 1
+) &
+LOCK_HOLDER_PID=$!
+while [[ ! -e "${FAKE_STARTER}/lock-ready" ]]; do sleep 0.01; done
+if PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/runtime-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
+    printf 'runtime UAT bypassed the deployment lock\n' >&2
+    exit 1
+fi
+[[ ! -e "${CALL_LOG}" ]] || {
+    printf 'runtime UAT mutated while the deployment lock was held\n' >&2
+    exit 1
+}
+wait "${LOCK_HOLDER_PID}"
 
 PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/runtime-uat.sh" > "${OUTPUT_LOG}" 2>&1
 

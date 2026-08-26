@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+STARTER_SCRIPT_ROOT="${ROOT}"
 TEMPORARY_DIRECTORY="$(mktemp -d)"
 trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 
@@ -9,19 +10,37 @@ grep -Fq 'mktemp -d "${SOURCES_DIR}/.staging.XXXXXX"' "${ROOT}/deploy.sh"
 grep -Fq 'merge-base --is-ancestor "${required_commit}" "${target}"' "${ROOT}/deploy.sh"
 grep -Fq 'status --porcelain' "${ROOT}/deploy.sh"
 grep -Fq 'RESET WILL DELETE ALL NAMED VOLUMES' "${ROOT}/deploy.sh"
-grep -Fq 'acquire_deploy_lock' "${ROOT}/deploy.sh"
-grep -Fq 'export STARTER_DEPLOY_LOCK_FD' "${ROOT}/deploy.sh"
-grep -Fq 'acquire_indexer_admin_lock' "${ROOT}/repository.sh"
-main_block="$(awk '/main\(\)/,/^}/' "${ROOT}/deploy.sh")"
-grep -Fq 'command -v flock' <<< "${main_block}"
-lock_line="$(grep -n 'acquire_deploy_lock' <<< "${main_block}" | cut -d: -f1)"
-prepare_line="$(grep -n 'prepare_sources' <<< "${main_block}" | cut -d: -f1)"
-[[ -n "${lock_line}" && -n "${prepare_line}" && "${lock_line}" -lt "${prepare_line}" ]]
+grep -Fq 'with_deploy_lock' "${ROOT}/deploy.sh"
+grep -Fq 'deploy_impl' "${ROOT}/deploy.sh"
+grep -Fq 'repository_checkout_impl' "${ROOT}/repository.sh"
+main_block="$(awk '/deploy_main\(\)/,/^}/' "${ROOT}/deploy.sh")"
+grep -Fq 'with_deploy_lock deploy_impl' <<< "${main_block}"
+lock_line="$(grep -n 'with_deploy_lock' <<< "${main_block}" | cut -d: -f1)"
+[[ -n "${lock_line}" ]]
 awk '/reset_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | grep -Fq 'down --remove-orphans --volumes'
 if awk '/normal_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | rg -- '--volumes'; then
     printf 'normal deployment deletes volumes\n' >&2
     exit 1
 fi
+
+source "${STARTER_SCRIPT_ROOT}/deploy.sh"
+DEPLOY_LOCK_FILE="${TEMPORARY_DIRECTORY}/public-deploy.lock"
+ROOT="${TEMPORARY_DIRECTORY}"
+deploy_impl() { touch "${TEMPORARY_DIRECTORY}/deploy-mutated"; }
+(
+    exec 9>"${DEPLOY_LOCK_FILE}"
+    flock -n 9
+    touch "${TEMPORARY_DIRECTORY}/deploy-lock-ready"
+    sleep 1
+) &
+lock_holder=$!
+while [[ ! -e "${TEMPORARY_DIRECTORY}/deploy-lock-ready" ]]; do sleep 0.01; done
+if (deploy_main normal); then
+    printf 'deploy bypassed the deployment lock\n' >&2
+    exit 1
+fi
+[[ ! -e "${TEMPORARY_DIRECTORY}/deploy-mutated" ]]
+wait "${lock_holder}"
 
 make_remote() {
     local name="$1"
@@ -31,12 +50,12 @@ make_remote() {
     git -C "${TEMPORARY_DIRECTORY}/${name}-seed" config user.name test
     touch "${TEMPORARY_DIRECTORY}/${name}-seed/${name}"
     if [[ "${name}" == semantic ]]; then
-        mkdir -p "${TEMPORARY_DIRECTORY}/${name}-seed/fixtures/uat/payment-service" \
-            "${TEMPORARY_DIRECTORY}/${name}-seed/fixtures/uat/order-service" \
-            "${TEMPORARY_DIRECTORY}/${name}-seed/fixtures/uat/video-service"
-        touch "${TEMPORARY_DIRECTORY}/${name}-seed/fixtures/uat/payment-service/pom.xml" \
-            "${TEMPORARY_DIRECTORY}/${name}-seed/fixtures/uat/order-service/pom.xml" \
-            "${TEMPORARY_DIRECTORY}/${name}-seed/fixtures/uat/video-service/pom.xml"
+        mkdir -p "${TEMPORARY_DIRECTORY}/${name}-seed/semantic-indexer/fixtures/uat/payment-service" \
+            "${TEMPORARY_DIRECTORY}/${name}-seed/semantic-indexer/fixtures/uat/order-service" \
+            "${TEMPORARY_DIRECTORY}/${name}-seed/semantic-indexer/fixtures/uat/video-service"
+        touch "${TEMPORARY_DIRECTORY}/${name}-seed/semantic-indexer/fixtures/uat/payment-service/pom.xml" \
+            "${TEMPORARY_DIRECTORY}/${name}-seed/semantic-indexer/fixtures/uat/order-service/pom.xml" \
+            "${TEMPORARY_DIRECTORY}/${name}-seed/semantic-indexer/fixtures/uat/video-service/pom.xml"
     fi
     git -C "${TEMPORARY_DIRECTORY}/${name}-seed" add .
     git -C "${TEMPORARY_DIRECTORY}/${name}-seed" commit --quiet -m initial
@@ -48,7 +67,7 @@ make_remote() {
 make_remote runtime
 make_remote semantic
 mkdir -p "${TEMPORARY_DIRECTORY}/sources"
-source "${ROOT}/deploy.sh"
+source "${STARTER_SCRIPT_ROOT}/deploy.sh"
 SOURCES_DIR="${TEMPORARY_DIRECTORY}/sources"
 REQUIRED_RUNTIME_COMMIT=""
 prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIRECTORY}/semantic.git" main
