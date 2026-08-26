@@ -17,7 +17,8 @@ main_block="$(awk '/deploy_main\(\)/,/^}/' "${ROOT}/deploy.sh")"
 grep -Fq 'with_deploy_lock deploy_impl' <<< "${main_block}"
 lock_line="$(grep -n 'with_deploy_lock' <<< "${main_block}" | cut -d: -f1)"
 [[ -n "${lock_line}" ]]
-awk '/reset_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | grep -Fq 'down --remove-orphans --volumes'
+awk '/stop_existing_indexer\(\)/,/^}/' "${ROOT}/deploy.sh" | grep -Fq -- '--profile uat-evidence down --remove-orphans'
+awk '/reset_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | grep -Fq -- '--profile uat-evidence down --remove-orphans --volumes'
 if awk '/normal_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | rg -- '--volumes'; then
     printf 'normal deployment deletes volumes\n' >&2
     exit 1

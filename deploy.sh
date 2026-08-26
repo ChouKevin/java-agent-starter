@@ -34,19 +34,13 @@ env_or_default() {
     [[ -n "${configured}" ]] && printf '%s' "${configured}" || printf '%s' "$2"
 }
 
-with_deploy_lock() {
-    local operation_lock_fd status
+with_deploy_lock() (
+    local operation_lock_fd
     mkdir -p "${ROOT}/.runtime"
     exec {operation_lock_fd}>"${DEPLOY_LOCK_FILE}"
     flock -n "${operation_lock_fd}" || fail "another starter deployment holds ${DEPLOY_LOCK_FILE}"
-    if "$@"; then
-        status=0
-    else
-        status=$?
-    fi
-    exec {operation_lock_fd}>&-
-    return "${status}"
-}
+    "$@"
+)
 
 create_env_if_missing() {
     local semantic_token indexer_token postgres_password root_password bootstrap_password indexer_password query_password
@@ -248,6 +242,8 @@ ensure_all_repositories() {
 wait_for_compatible_manifests() {
     "${COMPOSE[@]}" up -d --force-recreate --no-deps semantic-query \
         || { printf 'deploy: Query cannot start: schema-rebuild required\n' >&2; return 1; }
+    "${COMPOSE[@]}" up -d --force-recreate --no-deps semantic-query-gateway \
+        || { printf 'deploy: Query loopback gateway cannot start\n' >&2; return 1; }
     "${COMPOSE[@]}" --profile semantic-query-check run --rm semantic-query-probe \
         || { printf 'deploy: Query did not observe compatible sealed manifests; run ./deploy.sh schema-rebuild\n' >&2; return 1; }
 }
@@ -332,6 +328,7 @@ restore_previous_query() {
     [[ "${QUERY_BACKUP_CAPTURED}" == true ]] || return 1
     docker image tag "${QUERY_BACKUP_IMAGE}" java-agent-semantic-query:latest || return 1
     "${COMPOSE[@]}" up -d --force-recreate --no-deps semantic-query || return 1
+    "${COMPOSE[@]}" up -d --force-recreate --no-deps semantic-query-gateway || return 1
     "${COMPOSE[@]}" --profile semantic-query-check run --rm semantic-query-probe || return 1
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || return 1
     "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe || return 1
@@ -345,13 +342,13 @@ cleanup_query_backup() {
 }
 
 recover_schema_rebuild() {
-    "${COMPOSE[@]}" stop session-agent-runtime semantic-query >/dev/null 2>&1 || return 1
+    "${COMPOSE[@]}" stop session-agent-runtime semantic-query-gateway semantic-query >/dev/null 2>&1 || return 1
     rollback_rebuilt_repositories || return 1
     restore_previous_query
 }
 
 stop_existing_indexer() {
-    "${COMPOSE[@]}" down --remove-orphans || fail "existing stack teardown failed"
+    "${COMPOSE[@]}" --profile uat-evidence down --remove-orphans || fail "existing stack teardown failed"
     [[ -z "$("${COMPOSE[@]}" ps -q semantic-indexer)" ]] \
         || fail "old Indexer is still running after teardown"
 }
@@ -398,7 +395,7 @@ schema_rebuild() {
 
 reset_deploy() {
     printf 'deploy: RESET WILL DELETE ALL NAMED VOLUMES.\n' >&2
-    "${COMPOSE[@]}" down --remove-orphans --volumes || fail "reset teardown failed"
+    "${COMPOSE[@]}" --profile uat-evidence down --remove-orphans --volumes || fail "reset teardown failed"
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres semantic-mongodb \
         || fail "database startup failed"
     bootstrap_schema || fail "schema bootstrap failed"

@@ -16,19 +16,13 @@ source "${ROOT}/semantic-index-uat.sh"
 
 fixture_fail() { printf 'fixture: %s\n' "$*" >&2; exit 1; }
 
-fixture_with_deploy_lock() {
-    local operation_lock_fd status
+fixture_with_deploy_lock() (
+    local operation_lock_fd
     mkdir -p "${FIXTURE_RUNTIME_ROOT}/.runtime"
     exec {operation_lock_fd}>"${FIXTURE_RUNTIME_ROOT}/.runtime/deploy.lock"
     flock -n "${operation_lock_fd}" || fixture_fail "another starter deployment holds ${FIXTURE_RUNTIME_ROOT}/.runtime/deploy.lock"
-    if "$@"; then
-        status=0
-    else
-        status=$?
-    fi
-    exec {operation_lock_fd}>&-
-    return "${status}"
-}
+    "$@"
+)
 
 fixture_validate_runtime_root() {
     [[ -n "${FIXTURE_RUNTIME_ROOT}" && "${FIXTURE_RUNTIME_ROOT}" != / && "${FIXTURE_RUNTIME_ROOT}" == /* ]] \

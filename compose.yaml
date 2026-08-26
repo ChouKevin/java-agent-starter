@@ -115,8 +115,18 @@ services:
     environment:
       SEMANTIC_MONGODB_URI: mongodb://semantic_query:${SEMANTIC_MONGO_QUERY_PASSWORD:?required}@semantic-mongodb:27017/semantic_uat?authSource=semantic_uat
       SEMANTIC_QUERY_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
-    ports: ["127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"]
     networks: [semantic-read]
+
+  semantic-query-gateway:
+    <<: *runtime-logging
+    image: alpine:3.21
+    depends_on:
+      semantic-query:
+        condition: service_started
+    command: ["sh", "-ec", "exec nc -lk -p 8080 -e nc semantic-query 8080"]
+    ports: ["127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"]
+    restart: unless-stopped
+    networks: [semantic-read, semantic-query-ingress]
 
   session-agent-runtime:
     <<: *runtime-logging
@@ -148,7 +158,7 @@ services:
     profiles: [semantic-index-check]
     environment:
       SEMANTIC_INDEXER_ADMIN_TOKEN: ${SEMANTIC_INDEXER_ADMIN_TOKEN:?required}
-    command: ["/bin/sh", "-ec", "curl --fail --silent --show-error --retry 30 --retry-connrefused -H X-Api-Token:\ $$SEMANTIC_INDEXER_ADMIN_TOKEN -X POST http://semantic-indexer:8080/index/repositories/payment-service/ensure"]
+    command: ["/bin/sh", "-ec", "curl --fail --silent --show-error --retry 30 --retry-connrefused -H \"X-Api-Token: $$SEMANTIC_INDEXER_ADMIN_TOKEN\" -X POST http://semantic-indexer:8080/index/repositories/payment-service/ensure"]
     restart: "no"
     networks: [semantic-admin]
 
@@ -157,7 +167,7 @@ services:
     profiles: [semantic-query-check]
     environment:
       SEMANTIC_QUERY_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
-    command: ["/bin/sh", "-ec", "curl --fail --silent --show-error --retry 30 --retry-connrefused -H X-Api-Token:\ $$SEMANTIC_QUERY_API_TOKEN http://semantic-query:8080/v1/repositories >/dev/null"]
+    command: ["/bin/sh", "-ec", "curl --fail --silent --show-error --retry 30 --retry-connrefused -H \"X-Api-Token: $$SEMANTIC_QUERY_API_TOKEN\" http://semantic-query:8080/v1/repositories >/dev/null"]
     restart: "no"
     networks: [semantic-read]
 
@@ -185,5 +195,6 @@ networks:
     internal: true
   semantic-read:
     internal: true
+  semantic-query-ingress:
   semantic-admin:
   model-egress:

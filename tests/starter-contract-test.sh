@@ -12,13 +12,20 @@ trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 
 bash -n "${ROOT}/deploy.sh" "${ROOT}/fixture.sh" "${ROOT}/repository.sh" "${ROOT}/runtime-uat.sh" "${ROOT}/semantic-index-uat.sh"
 sed 's/=$/=contract-value/' "${ROOT}/.env.example" > "${TEMPORARY_DIRECTORY}/.env"
-compose_json="$(STARTER_ROOT="${ROOT}" docker compose --project-name starter-contract --env-file "${TEMPORARY_DIRECTORY}/.env" --profile setup --profile schema-maintenance -f "${ROOT}/compose.yaml" config --format json)"
+compose_json="$(STARTER_ROOT="${ROOT}" docker compose --project-name starter-contract --env-file "${TEMPORARY_DIRECTORY}/.env" \
+    --profile setup --profile schema-maintenance --profile semantic-index-check --profile semantic-query-check \
+    -f "${ROOT}/compose.yaml" config --format json)"
 jq -e '
-  (.services | has("semantic-mongodb") and has("semantic-mongo-init") and has("semantic-indexer") and has("semantic-query") and has("session-agent-runtime"))
+  (.services | has("semantic-mongodb") and has("semantic-mongo-init") and has("semantic-indexer") and has("semantic-query") and has("semantic-query-gateway") and has("session-agent-runtime"))
   and ([.services | keys[] | select(. == "semantic-indexer")] | length) == 1
   and ((.services["semantic-indexer"].deploy.replicas // 1) == 1)
   and .services["session-agent-runtime"].environment.SEMANTIC_BASE_URL == "http://semantic-query:8080"
   and (.services["semantic-query"].networks | keys) == ["semantic-read"]
+  and ((.services["semantic-query"].ports // []) | length) == 0
+  and (.services["semantic-query-gateway"].depends_on["semantic-query"].condition == "service_started")
+  and (.services["semantic-query-gateway"].networks | keys | sort) == ["semantic-query-ingress", "semantic-read"]
+  and .services["semantic-query-gateway"].ports[0].host_ip == "127.0.0.1"
+  and .services["semantic-query-gateway"].ports[0].target == 8080
   and ((.services["semantic-indexer"].volumes | map(.target)) | index("/uat-git")) != null
   and ((.services["semantic-indexer"].volumes | map(.target)) | index("/data/repos")) != null
   and ((.services["semantic-indexer"].volumes | map(.target)) | index("/data/jdtls")) != null
@@ -26,6 +33,8 @@ jq -e '
   and ([.services["semantic-query"].environment | keys[] | select(test("JDT|MODEL|GOOGLE|GIT"))] | length) == 0
   and (.services["semantic-mongodb"].environment.MONGO_INITDB_DATABASE == "semantic_uat")
   and ([.services["semantic-mongo-init"].environment.SEMANTIC_MONGODB_URI, .services["semantic-indexer"].environment.SEMANTIC_MONGODB_URI, .services["semantic-query"].environment.SEMANTIC_MONGODB_URI] | all(contains("/semantic_uat?authSource=semantic_uat")))
+  and (.services["semantic-index-probe"].command[2] | contains("-H \"X-Api-Token: $$SEMANTIC_INDEXER_ADMIN_TOKEN\""))
+  and (.services["semantic-query-probe"].command[2] | contains("-H \"X-Api-Token: $$SEMANTIC_QUERY_API_TOKEN\""))
   and (.volumes | has("semantic-mongodb-data") and has("semantic-indexer-repository-data") and has("semantic-indexer-jdt-data"))
 ' <<< "${compose_json}" >/dev/null
 
