@@ -15,11 +15,20 @@ DEPLOYMENT_SEMANTIC_URL=""
 DEPLOYMENT_SEMANTIC_REF=""
 DEPLOYMENT_SEMANTIC_TARGET_SHA=""
 COMPOSE=()
+STAGING_DIRECTORIES=()
 QUERY_BACKUP_IMAGE="java-agent-semantic-query:pre-deploy"
 QUERY_BACKUP_CAPTURED=false
 DEPLOY_LOCK_FILE="${ROOT}/.runtime/deploy.lock"
 
-fail() { printf 'deploy: %s\n' "$*" >&2; exit 1; }
+cleanup_staging_directories() {
+    local staging_directory
+    for staging_directory in "${STAGING_DIRECTORIES[@]}"; do
+        rm -rf -- "${staging_directory}"
+    done
+    STAGING_DIRECTORIES=()
+}
+
+fail() { cleanup_staging_directories; printf 'deploy: %s\n' "$*" >&2; exit 1; }
 
 env_value() {
     local key="$1"
@@ -81,11 +90,13 @@ remote_branch_sha() {
     printf '%s' "${result%%[[:space:]]*}"
 }
 
-stage_branch_source() {
+stage_branch_source() (
     local label="$1" url="$2" branch="$3" required_commit="${4:-}"
-    local target staging actual
+    local target staging_parent staging actual staged=false
     target="$(remote_branch_sha "${url}" "${branch}")"
-    staging="$(mktemp -d "${SOURCES_DIR}/.staging.XXXXXX")/${label}"
+    staging_parent="$(mktemp -d "${SOURCES_DIR}/.staging.XXXXXX")" || fail "${label} staging directory could not be created"
+    trap '[[ "${staged}" == true ]] || rm -rf -- "${staging_parent}"' EXIT
+    staging="${staging_parent}/${label}"
     git clone --branch "${branch}" --single-branch "${url}" "${staging}" || fail "${label} source could not be staged"
     actual="$(git -C "${staging}" rev-parse HEAD)"
     [[ "${actual}" == "${target}" ]] || fail "${label} changed while being staged"
@@ -93,8 +104,9 @@ stage_branch_source() {
         git -C "${staging}" merge-base --is-ancestor "${required_commit}" "${target}" \
             || fail "Session Agent Runtime target ${target} does not contain required compatible commit ${required_commit}"
     fi
+    staged=true
     printf '%s' "${staging}"
-}
+)
 
 validate_staged_source() {
     local label="$1" url="$2" branch="$3" destination="$4" staging="$5"
@@ -129,12 +141,15 @@ prepare_sources() {
     mkdir -p "${SOURCES_DIR}"
     runtime_staging="$(stage_branch_source session-agent-runtime "${runtime_url}" "${runtime_ref}" "${REQUIRED_RUNTIME_COMMIT}")" \
         || fail "Session Agent Runtime source could not be staged"
+    STAGING_DIRECTORIES+=("${runtime_staging%/*}")
     semantic_staging="$(stage_branch_source java-code-intelligence "${semantic_url}" "${semantic_ref}")" \
         || fail "Semantic source could not be staged"
+    STAGING_DIRECTORIES+=("${semantic_staging%/*}")
     validate_staged_source "Session Agent Runtime" "${runtime_url}" "${runtime_ref}" "${SOURCES_DIR}/session-agent-runtime" "${runtime_staging}"
     validate_staged_source "Semantic" "${semantic_url}" "${semantic_ref}" "${SOURCES_DIR}/java-code-intelligence" "${semantic_staging}"
     promote_staged_source "${SOURCES_DIR}/session-agent-runtime" "${runtime_staging}"
     promote_staged_source "${SOURCES_DIR}/java-code-intelligence" "${semantic_staging}"
+    cleanup_staging_directories
     DEPLOYMENT_RUNTIME_URL="${runtime_url}"
     DEPLOYMENT_RUNTIME_REF="${runtime_ref}"
     DEPLOYMENT_RUNTIME_TARGET_SHA="$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)"

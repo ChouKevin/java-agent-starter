@@ -45,6 +45,41 @@ source "${UAT_SCRIPT}"
 EVIDENCE_DIRECTORY="${TEMPORARY_DIRECTORY}/evidence"
 mkdir -p "${EVIDENCE_DIRECTORY}"
 
+make_fixture_remote() {
+    local repository="$1" remote="${UAT_GIT_ROOT}/${1}.git" checkout="${TEMPORARY_DIRECTORY}/${1}-fixture"
+    git init --quiet --bare "${remote}"
+    git init --quiet --initial-branch=main "${checkout}"
+    git -C "${checkout}" config user.email test@example.invalid
+    git -C "${checkout}" config user.name test
+    printf 'v1\n' > "${checkout}/fixture.txt"
+    git -C "${checkout}" add fixture.txt
+    git -C "${checkout}" commit --quiet -m v1
+    git -C "${checkout}" tag -a v1 -m v1
+    printf 'v2\n' > "${checkout}/fixture.txt"
+    git -C "${checkout}" commit --quiet -am v2
+    git -C "${checkout}" tag -a v2 -m v2
+    git -C "${checkout}" remote add origin "${remote}"
+    git -C "${checkout}" push --quiet origin main --tags
+}
+
+UAT_GIT_ROOT="${TEMPORARY_DIRECTORY}/fixture-remotes"
+mkdir -p "${UAT_GIT_ROOT}"
+make_fixture_remote payment-service
+payment_v1="$(git --git-dir="${UAT_GIT_ROOT}/payment-service.git" rev-parse v1^{commit})"
+assert_fixture_revision payment-service v1 "${payment_v1}"
+if (assert_fixture_revision payment-service v1 "0000000000000000000000000000000000000000") 2>"${TEMPORARY_DIRECTORY}/fixture-revision-error"; then
+    printf 'Semantic UAT accepted a publication revision that is not the peeled fixture tag\n' >&2
+    exit 1
+fi
+grep -Fq 'published revision mismatch for payment-service v1' "${TEMPORARY_DIRECTORY}/fixture-revision-error"
+initial_block="$(awk '/^semantic_uat_capture_initial_revisions\(\)/,/^}/' "${UAT_SCRIPT}")"
+grep -Fq 'assert_fixture_revision payment-service v1 "${payment_revision}"' <<< "${initial_block}"
+grep -Fq 'assert_fixture_revision order-service v1 "${order_revision}"' <<< "${initial_block}"
+grep -Fq 'assert_fixture_revision video-service v1 "${video_revision}"' <<< "${initial_block}"
+transition_block="$(awk '/^semantic_uat_gated_payment_transition_impl\(\)/,/^}/' "${UAT_SCRIPT}")"
+grep -Fq 'assert_fixture_revision payment-service v1 "${r1_revision}"' <<< "${transition_block}"
+grep -Fq 'assert_fixture_revision payment-service v2 "${r2_revision}"' <<< "${transition_block}"
+
 CALLS="${TEMPORARY_DIRECTORY}/calls"
 record() { printf '%s\n' "$*" >> "${CALLS}"; }
 deploy_impl() { record deploy-reset; }

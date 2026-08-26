@@ -118,6 +118,16 @@ publication() { indexer GET "/index/repositories/$1/publication"; }
 
 pointer() { jq -ce '.currentPointer // error("missing current pointer")'; }
 
+assert_fixture_revision() {
+    local repository="$1" tag="$2" actual="$3" remote expected
+    remote="${UAT_GIT_ROOT}/${repository}.git"
+    expected="$(git --git-dir="${remote}" rev-parse "${tag}^{commit}")" \
+        || uat_fail "fixture ${tag} tag is unavailable for ${repository}"
+    [[ "${actual}" == "${expected}" ]] \
+        || uat_fail "published revision mismatch for ${repository} ${tag}: expected=${expected} actual=${actual}"
+    evidence "fixtureRevision repository=${repository} tag=${tag} revision=${actual}"
+}
+
 query_assert_success() {
     local label="$1" method="$2" path="$3" body="${4:-}" response
     response="$(query "${method}" "${path}" "${body}")" || uat_fail "Query ${label} transport failed"
@@ -232,6 +242,9 @@ semantic_uat_capture_initial_revisions() {
     payment_revision="$(query GET /v1/repositories/payment-service | jq -er '.currentRevision // .revision.value')"
     order_revision="$(query GET /v1/repositories/order-service | jq -er '.currentRevision // .revision.value')"
     video_revision="$(query GET /v1/repositories/video-service | jq -er '.currentRevision // .revision.value')"
+    assert_fixture_revision payment-service v1 "${payment_revision}"
+    assert_fixture_revision order-service v1 "${order_revision}"
+    assert_fixture_revision video-service v1 "${video_revision}"
     printf '%s\n%s\n%s\n' "${payment_revision}" "${order_revision}" "${video_revision}" > "${EVIDENCE_DIRECTORY}/initial-revisions.txt"
     evidence "initial paymentRevision=${payment_revision} orderRevision=${order_revision} videoRevision=${video_revision}"
 }
@@ -271,6 +284,7 @@ semantic_uat_gated_payment_transition_impl() {
     # Repository configuration is switched by the UAT profile before this phase; no Runtime fixture is copied or edited.
     r1="$(publication payment-service | pointer)"
     r1_revision="$(jq -er '.revision' <<< "${r1}")"
+    assert_fixture_revision payment-service v1 "${r1_revision}"
     fixture_use_impl payment-service v2
     arm_response="$(indexer POST /index/uat/publication/arm)" \
         || uat_fail "UAT pre-publication pause is unavailable; production profiles must not expose it"
@@ -290,6 +304,7 @@ semantic_uat_gated_payment_transition_impl() {
     wait_for_job payment-service "${job_id}" >/dev/null
     r2="$(publication payment-service | pointer)"
     r2_revision="$(jq -er '.revision' <<< "${r2}")"
+    assert_fixture_revision payment-service v2 "${r2_revision}"
     [[ "${r1_revision}" != "${r2_revision}" ]] || uat_fail "R2 did not change the published revision"
     retain_pointer_evidence "${label}" "${r1}" "${r2}"
     assert_stale_revision "${r1_revision}" "${r2_revision}"

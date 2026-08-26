@@ -73,6 +73,10 @@ SOURCES_DIR="${TEMPORARY_DIRECTORY}/sources"
 REQUIRED_RUNTIME_COMMIT=""
 prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIRECTORY}/semantic.git" main
 runtime_before="$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)"
+if find "${SOURCES_DIR}" -maxdepth 1 -type d -name '.staging.*' -print -quit | grep -q .; then
+    printf 'successful source promotion left a staging directory behind\n' >&2
+    exit 1
+fi
 
 printf 'dirty\n' > "${SOURCES_DIR}/session-agent-runtime/local-change.txt"
 if (prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIRECTORY}/semantic.git" main); then
@@ -93,3 +97,7 @@ if (prepare_sources "${TEMPORARY_DIRECTORY}/runtime.git" main "${TEMPORARY_DIREC
     exit 1
 fi
 [[ "$(git -C "${SOURCES_DIR}/session-agent-runtime" rev-parse HEAD)" == "${runtime_before}" ]]
+if find "${SOURCES_DIR}" -maxdepth 1 -type d -name '.staging.*' -print -quit | grep -q .; then
+    printf 'failed source staging left a staging directory behind\n' >&2
+    exit 1
+fi
