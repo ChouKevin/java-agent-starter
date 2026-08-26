@@ -1,14 +1,11 @@
 semantic:
   repositories:
     payment-service:
-      mode: LOCAL_FIXTURE
-      display-name: Payment Service
-      path: /fixtures/payment-service
+      url: file:///uat-git/payment-service.git
+      default-branch: main
     order-service:
-      mode: LOCAL_FIXTURE
-      display-name: Order Service
-      path: /fixtures/order-service
+      url: file:///uat-git/order-service.git
+      default-branch: main
     video-service:
-      mode: LOCAL_FIXTURE
-      display-name: Video Service
-      path: /fixtures/video-service
+      url: file:///uat-git/video-service.git
+      default-branch: main

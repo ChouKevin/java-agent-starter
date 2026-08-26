@@ -11,6 +11,8 @@ grep -Fq '"${active}" == false' "${ROOT}/deploy.sh"
 grep -Fq '"${phase}" == COMPLETE' "${ROOT}/deploy.sh"
 grep -Fq 'normal_deploy()' "${ROOT}/deploy.sh"
 grep -Fq 'reset_deploy()' "${ROOT}/deploy.sh"
+grep -Fq 'fixture_prepare_impl' "${ROOT}/deploy.sh"
+grep -Fq 'stop_existing_indexer' "${ROOT}/deploy.sh"
 if awk '/normal_deploy\(\)/,/^}/' "${ROOT}/deploy.sh" | rg -- 'down|--volumes'; then
     printf 'normal deploy must not tear down volumes\n' >&2
     exit 1

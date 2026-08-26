@@ -7,7 +7,7 @@ TEMPORARY_DIRECTORY="$(mktemp -d)"
 trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 
 [[ -d "${SEMANTIC_FIXTURES}" ]] || { printf 'Semantic UAT fixture source is unavailable\n' >&2; exit 1; }
-grep -Fq '${STARTER_ROOT}/.runtime/sources/java-code-intelligence/semantic-indexer/fixtures/uat/payment-service' "${ROOT}/compose.yaml"
+grep -Fq '${STARTER_ROOT}/.runtime/uat-git:/uat-git:ro' "${ROOT}/compose.yaml"
 semantic_before="$(git -C "$(dirname -- "$(dirname -- "${SEMANTIC_FIXTURES}")")" status --porcelain)"
 
 run_fixture() {

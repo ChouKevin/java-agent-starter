@@ -9,9 +9,14 @@ grep -Fq 'semantic_index_uat_impl' "${UAT_SCRIPT}"
 grep -Fq 'deploy_impl reset' "${UAT_SCRIPT}"
 grep -Fq 'model-egress-canary' "${UAT_SCRIPT}"
 grep -Fq 'REVISION_OUTDATED' "${UAT_SCRIPT}"
-grep -Fq 'semantic-indexer-repository-data' "${UAT_SCRIPT}"
-grep -Fq 'semantic-repository-data' "${UAT_SCRIPT}"
-grep -Fq 'cf588ff' "${ROOT}/.env.example"
+if rg -n 'semantic-repository-data|assert_split_cutover_volumes' "${UAT_SCRIPT}"; then
+    printf 'Semantic UAT still checks removed legacy volumes\n' >&2
+    exit 1
+fi
+if rg -n 'SEMANTIC_LEGACY|cf588ff' "${ROOT}/.env.example"; then
+    printf 'legacy Semantic environment remains\n' >&2
+    exit 1
+fi
 grep -Fq 'semantic-index-uat.sh' "${ROOT}/runtime-uat.sh"
 grep -Fq 'SEMANTIC_UAT_PROFILE' "${ROOT}/compose.yaml"
 grep -Fq 'SEMANTIC_UAT_PROFILE' "${ROOT}/README.md"

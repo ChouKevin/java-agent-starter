@@ -10,14 +10,23 @@ grep -Fq 'semantic_ref="$(env_or_default SEMANTIC_GIT_REF main)"' "${ROOT}/deplo
 TEMPORARY_DIRECTORY="$(mktemp -d)"
 trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 
-bash -n "${ROOT}/deploy.sh" "${ROOT}/repository.sh" "${ROOT}/runtime-uat.sh"
+bash -n "${ROOT}/deploy.sh" "${ROOT}/fixture.sh" "${ROOT}/repository.sh" "${ROOT}/runtime-uat.sh" "${ROOT}/semantic-index-uat.sh"
 sed 's/=$/=contract-value/' "${ROOT}/.env.example" > "${TEMPORARY_DIRECTORY}/.env"
-compose_json="$(STARTER_ROOT="${ROOT}" docker compose --project-name starter-contract --env-file "${TEMPORARY_DIRECTORY}/.env" --profile setup --profile schema-maintenance --profile legacy-cutover -f "${ROOT}/compose.yaml" config --format json)"
+compose_json="$(STARTER_ROOT="${ROOT}" docker compose --project-name starter-contract --env-file "${TEMPORARY_DIRECTORY}/.env" --profile setup --profile schema-maintenance -f "${ROOT}/compose.yaml" config --format json)"
 jq -e '
   (.services | has("semantic-mongodb") and has("semantic-mongo-init") and has("semantic-indexer") and has("semantic-query") and has("session-agent-runtime"))
+  and ([.services | keys[] | select(. == "semantic-indexer")] | length) == 1
+  and ((.services["semantic-indexer"].deploy.replicas // 1) == 1)
   and .services["session-agent-runtime"].environment.SEMANTIC_BASE_URL == "http://semantic-query:8080"
   and (.services["semantic-query"].networks | keys) == ["semantic-read"]
-  and (.volumes | has("semantic-mongodb-data") and has("semantic-indexer-repository-data") and has("semantic-repository-data"))
+  and ((.services["semantic-indexer"].volumes | map(.target)) | index("/uat-git")) != null
+  and ((.services["semantic-indexer"].volumes | map(.target)) | index("/data/repos")) != null
+  and ((.services["semantic-indexer"].volumes | map(.target)) | index("/data/jdtls")) != null
+  and ((.services["semantic-query"].volumes // []) | length) == 0
+  and ([.services["semantic-query"].environment | keys[] | select(test("JDT|MODEL|GOOGLE|GIT"))] | length) == 0
+  and (.services["semantic-mongodb"].environment.MONGO_INITDB_DATABASE == "semantic_uat")
+  and ([.services["semantic-mongo-init"].environment.SEMANTIC_MONGODB_URI, .services["semantic-indexer"].environment.SEMANTIC_MONGODB_URI, .services["semantic-query"].environment.SEMANTIC_MONGODB_URI] | all(contains("/semantic_uat?authSource=semantic_uat")))
+  and (.volumes | has("semantic-mongodb-data") and has("semantic-indexer-repository-data") and has("semantic-indexer-jdt-data"))
 ' <<< "${compose_json}" >/dev/null
 
 jq -e '
@@ -25,7 +34,19 @@ jq -e '
   and (.services["semantic-mongo-users"].command | join(" ") | contains("exec mongosh"))
   and (.services["semantic-mongo-users"].command | join(" ") | contains("$SEMANTIC_MONGO_ROOT_USERNAME"))
 ' <<< "${compose_json}" >/dev/null
-if rg -n 'FIXTURE|semantic-probe|semantic-check' "${ROOT}/compose.yaml" "${ROOT}/deploy.sh"; then
-    printf 'obsolete single-service probe contract remains\n' >&2
+rg -Fq 'semantic_uat' "${ROOT}/compose.yaml"
+rg -Fq 'semantic_uat' "${ROOT}/config/mongo-init.js"
+for repository in payment-service order-service video-service; do
+    rg -Fq "url: file:///uat-git/${repository}.git" "${ROOT}/config/semantic-repositories.yml"
+done
+if rg -n 'semantic-service|legacy-cutover|SEMANTIC_LEGACY|fixture-init|payment-service-fixture|order-service-fixture|video-service-fixture|semantic-repository-data|semantic-jdt-data|LOCAL_FIXTURE|/fixtures/' \
+    "${ROOT}/compose.yaml" "${ROOT}/config" "${ROOT}/.env.example" "${ROOT}/semantic-index-uat.sh" \
+    || rg -n 'semantic-service|legacy-cutover|SEMANTIC_LEGACY|fixture-init|payment-service-fixture|order-service-fixture|video-service-fixture|semantic-repository-data|semantic-jdt-data' "${ROOT}/deploy.sh"; then
+    printf 'obsolete cutover or fixture configuration remains\n' >&2
+    exit 1
+fi
+if rg -n 'replSet|rs\.initiate|transaction|coordination|expected-database|expectedDatabase' \
+    "${ROOT}/compose.yaml" "${ROOT}/config" "${ROOT}/deploy.sh" "${ROOT}/semantic-index-uat.sh"; then
+    printf 'standalone semantic_uat configuration contains distributed coordination\n' >&2
     exit 1
 fi

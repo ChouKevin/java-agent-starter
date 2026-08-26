@@ -15,7 +15,6 @@ DEPLOYMENT_SEMANTIC_URL=""
 DEPLOYMENT_SEMANTIC_REF=""
 DEPLOYMENT_SEMANTIC_TARGET_SHA=""
 COMPOSE=()
-LEGACY_CONTAINER_ID=""
 QUERY_BACKUP_IMAGE="java-agent-semantic-query:pre-deploy"
 QUERY_BACKUP_CAPTURED=false
 DEPLOY_LOCK_FILE="${ROOT}/.runtime/deploy.lock"
@@ -351,87 +350,27 @@ recover_schema_rebuild() {
     restore_previous_query
 }
 
-prepare_legacy_cutover_image() {
-    local semantic_url="$1" legacy_ref="$2" legacy_directory="${ROOT}/.runtime/legacy-semantic"
-    rm -rf -- "${legacy_directory}"
-    git clone --no-checkout "${semantic_url}" "${legacy_directory}" || fail "legacy Semantic checkout failed"
-    git -C "${legacy_directory}" checkout --detach "${legacy_ref}" || fail "legacy Semantic ref could not be checked out"
-    [[ "$(git -C "${legacy_directory}" rev-parse HEAD)" == "${legacy_ref}" ]] || fail "legacy Semantic checkout is not the configured immutable SHA"
-    docker build --tag java-agent-semantic-legacy --file "${legacy_directory}/Dockerfile" "${legacy_directory}" || fail "legacy image build failed"
-}
-
-wait_for_legacy_semantic() {
-    local deadline port token
-    port="$(env_or_default SEMANTIC_HOST_PORT 8080)"
-    token="$(env_value SEMANTIC_QUERY_API_TOKEN)"
-    deadline=$((SECONDS + STARTUP_WAIT_SECONDS))
-    while (( SECONDS < deadline )); do
-        if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 \
-                -H "X-Api-Token: ${token}" "http://127.0.0.1:${port}/v1/repositories" >/dev/null; then
-            return
-        fi
-        sleep 2
-    done
-    printf 'deploy: pinned legacy Semantic did not become ready within %ss\n' "${STARTUP_WAIT_SECONDS}" >&2
-    return 1
-}
-
-activate_pinned_legacy_cutover() {
-    local actual_image expected_image
-    SEMANTIC_LEGACY_IMAGE=java-agent-semantic-legacy \
-        "${COMPOSE[@]}" --profile legacy-cutover up -d --force-recreate --no-deps semantic-service || return 1
-    detect_legacy_cutover
-    [[ -n "${LEGACY_CONTAINER_ID}" ]] || return 1
-    expected_image="$(docker image inspect --format '{{.Id}}' java-agent-semantic-legacy)" || return 1
-    actual_image="$(docker inspect --format '{{.Image}}' "${LEGACY_CONTAINER_ID}")" || return 1
-    [[ "${actual_image}" == "${expected_image}" ]] || return 1
-    wait_for_legacy_semantic
-}
-
-restart_legacy_on_query_failure() { "${COMPOSE[@]}" --profile legacy-cutover start semantic-service >/dev/null 2>&1 || true; }
-
-detect_legacy_cutover() {
-    LEGACY_CONTAINER_ID="$(docker ps --all --quiet --filter label=com.docker.compose.project=java-agent-uat \
-        --filter label=com.docker.compose.service=semantic-service | head -n 1)"
-}
-
-replace_legacy_after_query_ready() {
-    [[ -n "${LEGACY_CONTAINER_ID}" ]] || { wait_for_compatible_manifests; return; }
-    docker stop "${LEGACY_CONTAINER_ID}" >/dev/null \
-        || { printf 'deploy: could not stop the exact legacy Semantic container\n' >&2; return 1; }
-    if ! wait_for_compatible_manifests; then
-        docker start "${LEGACY_CONTAINER_ID}" >/dev/null || restart_legacy_on_query_failure
-        printf 'deploy: Query cutover failed; the exact legacy container was restored\n' >&2
-        return 1
-    fi
-    docker rm "${LEGACY_CONTAINER_ID}" >/dev/null \
-        || { printf 'deploy: could not remove the successfully replaced legacy container\n' >&2; return 1; }
-    LEGACY_CONTAINER_ID=""
+stop_existing_indexer() {
+    "${COMPOSE[@]}" down --remove-orphans || fail "existing stack teardown failed"
+    [[ -z "$("${COMPOSE[@]}" ps -q semantic-indexer)" ]] \
+        || fail "old Indexer is still running after teardown"
 }
 
 normal_deploy() {
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres semantic-mongodb || fail "database startup failed"
-    "${COMPOSE[@]}" --profile setup run --rm fixture-init || fail "fixture initialization failed"
     bootstrap_schema || fail "schema bootstrap failed"
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer startup failed"
     ensure_all_repositories
-    if ! replace_legacy_after_query_ready; then
-        if [[ -z "${LEGACY_CONTAINER_ID}" && "${QUERY_BACKUP_CAPTURED}" == true ]]; then
-            restore_previous_query || fail "Query update failed and the previous Query could not be restored"
-        fi
+    wait_for_compatible_manifests || {
+        restore_previous_query || fail "Query update failed and the previous Query could not be restored"
         fail "Query update failed"
-    fi
+    }
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-runtime || fail "Runtime startup failed"
     "${COMPOSE[@]}" --profile runtime-check run --rm runtime-probe || fail "Runtime probe failed"
     cleanup_query_backup
 }
 
 schema_rebuild() {
-    record_current_pointers
-    if ! "${COMPOSE[@]}" stop session-agent-runtime semantic-query semantic-indexer; then
-        restore_previous_query || fail "could not quiesce services or restore the previous Query"
-        fail "could not quiesce Query, Runtime, and Indexer"
-    fi
     if ! bootstrap_schema; then
         recover_schema_rebuild || fail "schema bootstrap failed and the previous Query could not be restored"
         fail "schema bootstrap failed; the previous Query was restored"
@@ -445,7 +384,7 @@ schema_rebuild() {
         recover_schema_rebuild || fail "schema-rebuild failed and verified recovery could not complete"
         fail "schema-rebuild failed; rebuilt pointers were rolled back and the previous Query was restored"
     fi
-    if ! replace_legacy_after_query_ready; then
+    if ! wait_for_compatible_manifests; then
         recover_schema_rebuild || fail "schema-rebuild Query failed and verified recovery could not complete"
         fail "schema-rebuild requires compatible sealed manifests; the previous Query was restored"
     fi
@@ -462,7 +401,6 @@ reset_deploy() {
     "${COMPOSE[@]}" down --remove-orphans --volumes || fail "reset teardown failed"
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" session-agent-postgres semantic-mongodb \
         || fail "database startup failed"
-    "${COMPOSE[@]}" --profile setup run --rm fixture-init || fail "fixture initialization failed"
     bootstrap_schema || fail "schema bootstrap failed"
     "${COMPOSE[@]}" up -d --wait --wait-timeout "${STARTUP_WAIT_SECONDS}" semantic-indexer || fail "Indexer startup failed"
     ensure_all_repositories
@@ -496,18 +434,19 @@ deploy_impl() {
     semantic_url="$(env_or_default SEMANTIC_GIT_URL git@github.com:ChouKevin/java-code-intelligence.git)"
     semantic_ref="$(env_or_default SEMANTIC_GIT_REF main)"
     export STARTER_ROOT="${ROOT}"
+    declare -F fixture_prepare_impl >/dev/null || source "${ROOT}/fixture.sh"
     COMPOSE=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
     prepare_sources "${runtime_url}" "${runtime_ref}" "${semantic_url}" "${semantic_ref}"
-    detect_legacy_cutover
-    if [[ -n "${LEGACY_CONTAINER_ID}" ]]; then
-        prepare_legacy_cutover_image "${semantic_url}" "$(env_or_default SEMANTIC_LEGACY_REF cf588ff)"
-        activate_pinned_legacy_cutover || fail "pinned legacy Semantic could not be activated"
-    fi
+    fixture_prepare_impl
     case "${mode}" in
         normal) capture_query_image false || fail "could not preserve the current Query image" ;;
-        schema-rebuild) capture_query_image true || fail "could not preserve the current Query image" ;;
+        schema-rebuild)
+            capture_query_image true || fail "could not preserve the current Query image"
+            record_current_pointers
+            ;;
         reset) ;;
     esac
+    stop_existing_indexer
     "${COMPOSE[@]}" build semantic-mongo-init semantic-indexer semantic-query session-agent-runtime || fail "image build failed"
     validate_deployment_sources
     case "${mode}" in

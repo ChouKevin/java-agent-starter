@@ -111,14 +111,6 @@ assert_query_is_cold() {
     } > "${LOG_DIRECTORY}/query-inspection.txt"
 }
 
-assert_split_cutover_volumes() {
-    # The old monolith and the split Indexer deliberately never share repository or JDT state.
-    docker volume inspect java-agent-uat_semantic-repository-data >/dev/null \
-        || uat_fail "legacy semantic-repository-data volume is unavailable"
-    docker volume inspect java-agent-uat_semantic-indexer-repository-data >/dev/null \
-        || uat_fail "Indexer semantic-indexer-repository-data volume is unavailable"
-}
-
 exercise_query_tool_families() {
     local payment_revision="$1" video_revision="$2" payment_search fact_id
     query_assert_success repositories GET /v1/repositories
@@ -220,7 +212,6 @@ semantic_index_uat_impl() {
     mkdir -p "${LOG_DIRECTORY}"
     : > "${LOG_DIRECTORY}/semantic-index-uat.log"
     deploy_impl reset
-    assert_split_cutover_volumes
     "${COMPOSE[@]}" --profile uat-evidence up -d model-egress-canary || uat_fail "model-egress canary did not start"
     local payment_revision order_revision video_revision
     payment_revision="$(query GET /v1/repositories/payment-service | jq -er '.currentRevision // .revision.value')"

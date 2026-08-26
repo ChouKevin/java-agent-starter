@@ -24,7 +24,7 @@ services:
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${SEMANTIC_MONGO_ROOT_USERNAME:-semantic_root}
       MONGO_INITDB_ROOT_PASSWORD: ${SEMANTIC_MONGO_ROOT_PASSWORD:?required}
-      MONGO_INITDB_DATABASE: semantic
+      MONGO_INITDB_DATABASE: semantic_uat
       SEMANTIC_MONGO_BOOTSTRAP_PASSWORD: ${SEMANTIC_MONGO_BOOTSTRAP_PASSWORD:?required}
       SEMANTIC_MONGO_INDEXER_PASSWORD: ${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}
       SEMANTIC_MONGO_QUERY_PASSWORD: ${SEMANTIC_MONGO_QUERY_PASSWORD:?required}
@@ -47,7 +47,7 @@ services:
       semantic-mongodb:
         condition: service_healthy
     environment:
-      SEMANTIC_MONGODB_URI: mongodb://semantic_bootstrap:${SEMANTIC_MONGO_BOOTSTRAP_PASSWORD:?required}@semantic-mongodb:27017/semantic?authSource=semantic
+      SEMANTIC_MONGODB_URI: mongodb://semantic_bootstrap:${SEMANTIC_MONGO_BOOTSTRAP_PASSWORD:?required}@semantic-mongodb:27017/semantic_uat?authSource=semantic_uat
     command: ["--spring.main.web-application-type=none", "--semantic.schema-bootstrap=true"]
     restart: "no"
     networks: [semantic-admin]
@@ -86,7 +86,7 @@ services:
       semantic-mongodb:
         condition: service_healthy
     environment:
-      SEMANTIC_MONGODB_URI: mongodb://semantic_indexer:${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}@semantic-mongodb:27017/semantic?authSource=semantic
+      SEMANTIC_MONGODB_URI: mongodb://semantic_indexer:${SEMANTIC_MONGO_INDEXER_PASSWORD:?required}@semantic-mongodb:27017/semantic_uat?authSource=semantic_uat
       SEMANTIC_INDEXER_ADMIN_TOKEN: ${SEMANTIC_INDEXER_ADMIN_TOKEN:?required}
       SPRING_PROFILES_ACTIVE: ${SEMANTIC_UAT_PROFILE:-}
       GIT_USERNAME: ${GIT_USERNAME:-}
@@ -98,9 +98,7 @@ services:
     ports: ["127.0.0.1:${SEMANTIC_INDEXER_HOST_PORT:-8081}:8080"]
     volumes:
       - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
-      - payment-service-fixture:/fixtures/payment-service:ro
-      - order-service-fixture:/fixtures/order-service:ro
-      - video-service-fixture:/fixtures/video-service:ro
+      - ${STARTER_ROOT}/.runtime/uat-git:/uat-git:ro
       - semantic-indexer-repository-data:/data/repos
       - semantic-indexer-jdt-data:/data/jdtls
     networks: [semantic-admin]
@@ -115,29 +113,10 @@ services:
       semantic-mongodb:
         condition: service_healthy
     environment:
-      SEMANTIC_MONGODB_URI: mongodb://semantic_query:${SEMANTIC_MONGO_QUERY_PASSWORD:?required}@semantic-mongodb:27017/semantic?authSource=semantic
+      SEMANTIC_MONGODB_URI: mongodb://semantic_query:${SEMANTIC_MONGO_QUERY_PASSWORD:?required}@semantic-mongodb:27017/semantic_uat?authSource=semantic_uat
       SEMANTIC_QUERY_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
     ports: ["127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"]
     networks: [semantic-read]
-
-  semantic-service:
-    <<: *runtime-logging
-    image: ${SEMANTIC_LEGACY_IMAGE:-java-agent-semantic-legacy}
-    profiles: [legacy-cutover]
-    environment:
-      SEMANTIC_API_TOKEN: ${SEMANTIC_QUERY_API_TOKEN:?required}
-      GIT_USERNAME: ${GIT_USERNAME:-}
-      GIT_TOKEN: ${GIT_TOKEN:-}
-      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/config/semantic-repositories.yml
-    ports: ["127.0.0.1:${SEMANTIC_HOST_PORT:-8080}:8080"]
-    volumes:
-      - ${STARTER_ROOT}/config/semantic-repositories.yml:/config/semantic-repositories.yml:ro
-      - payment-service-fixture:/fixtures/payment-service
-      - order-service-fixture:/fixtures/order-service
-      - video-service-fixture:/fixtures/video-service
-      - semantic-repository-data:/data/repos
-      - semantic-jdt-data:/data/jdtls
-    networks: [semantic-admin]
 
   session-agent-runtime:
     <<: *runtime-logging
@@ -163,27 +142,6 @@ services:
       SERVER_ADDRESS: 0.0.0.0
     ports: ["127.0.0.1:${SESSION_AGENT_HOST_PORT:-8090}:8080"]
     networks: [semantic-read, session-agent-network, model-egress]
-
-  fixture-init:
-    <<: *runtime-logging
-    image: alpine:3.22
-    profiles: [setup]
-    user: "0:0"
-    entrypoint: ["/bin/sh", "-ec"]
-    command: >-
-      cp -a /fixture-source/payment-service/. /fixtures/payment-service/ &&
-      cp -a /fixture-source/order-service/. /fixtures/order-service/ &&
-      cp -a /fixture-source/video-service/. /fixtures/video-service/ &&
-      chown -R 10001:10001 /fixtures
-    volumes:
-      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/semantic-indexer/fixtures/uat/payment-service:/fixture-source/payment-service:ro
-      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/semantic-indexer/fixtures/uat/order-service:/fixture-source/order-service:ro
-      - ${STARTER_ROOT}/.runtime/sources/java-code-intelligence/semantic-indexer/fixtures/uat/video-service:/fixture-source/video-service:ro
-      - payment-service-fixture:/fixtures/payment-service
-      - order-service-fixture:/fixtures/order-service
-      - video-service-fixture:/fixtures/video-service
-    restart: "no"
-    networks: [semantic-admin]
 
   semantic-index-probe:
     image: curlimages/curl:8.12.1
@@ -219,13 +177,8 @@ services:
 volumes:
   session-agent-postgres-data:
   semantic-mongodb-data:
-  payment-service-fixture:
-  order-service-fixture:
-  video-service-fixture:
   semantic-indexer-repository-data:
   semantic-indexer-jdt-data:
-  semantic-repository-data:
-  semantic-jdt-data:
 
 networks:
   session-agent-network:
