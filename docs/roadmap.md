@@ -2,17 +2,17 @@
 
 ## Ownership
 
-- **Session Agent Runtime:** conversation history, model/tool loop, feedback, citations, PostgreSQL persistence, HTTP API, and live model scenarios.
+- **Session Agent Runtime:** conversation history, model/tool loop, feedback, PostgreSQL persistence, HTTP API, and live model scenarios.
 - **Semantic:** repository catalog, exact Git indexing, JDT LS analysis, Mongo generations, and read-only source/query APIs.
 - **Starter:** exact source staging, deterministic Git remotes, Compose lifecycle, deployment record, and cross-service UAT orchestration.
 
-Starter must not add Runtime Java source, duplicate Semantic schemas, or implement conversation, citation, index, or persistence behavior.
+Starter must not add Runtime Java source, duplicate Semantic schemas, or implement conversation, model/tool-loop, index, or persistence behavior.
 
 ## Current UAT boundary
 
 Starter deploys independent Runtime and Semantic source SHAs from `.runtime/sources/` and records the pair in `deployment-record.txt`. Runtime listens on loopback port `8090`; the Semantic Query gateway listens on loopback port `8080`; Indexer admin uses loopback port `8081`. Internal networks keep Runtime away from the Indexer admin path.
 
-The complete `runtime-uat.sh` flow proves one Indexer, Mongo-only cold Query, exact Git fixture revisions, two payment `v1` to `v2` transitions, stale-revision feedback and model retry in one persisted session, five business-answer scenarios, reset isolation, safe evidence, and profile cleanup.
+The complete `runtime-uat.sh` flow proves one Indexer, Mongo-only cold Query, exact Git fixture revisions, two payment `v1` to `v2` transitions, stale-revision feedback and model retry in one persisted session, five business-answer scenarios, two Runtime contract scenarios, reset isolation, safe evidence, and profile cleanup.
 
 ## Acceptance rules
 

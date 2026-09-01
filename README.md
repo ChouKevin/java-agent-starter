@@ -68,12 +68,12 @@ One outer lock covers the whole run. The script:
 4. stops Indexer and exercises every Query tool family from MongoDB;
 5. rebuilds payment at the same revision;
 6. pauses payment `v2` before publication, proves `v1` stays visible, releases it, and checks exact `v2` plus typed `REVISION_OUTDATED` feedback for `v1`;
-7. lets the model retry with `v2` in the same conversation and runs five business scenarios;
+7. lets the model retry with `v2` in the same conversation and runs five business scenarios plus two Runtime contract scenarios;
 8. resets payment to `v1` without changing order or video, then repeats the full `v1` to `v2` transition.
 
-The five model scenarios cover payment methods, a runtime-only fee value, video formats, behavior absent from code, and an order cancellation flow whose refund behavior is not proven. They test honest limits as well as positive answers.
+The five business scenarios cover payment methods, a runtime-only fee value, video formats, behavior absent from code, and an order cancellation flow whose refund behavior is not proven. Two additional Runtime scenarios verify model-selected recovery from an outdated revision and complete same-session history on a follow-up question.
 
-Semantic evidence is under `.runtime/evidence/semantic-git-uat/`. The Session safe live report is under `.runtime/sources/session-agent-runtime/target/live-reports/`. Evidence contains IDs, revisions, generation IDs, state, tool order, citations, outcomes, and available usage only. It must not contain credentials, source payloads, questions, prompts, raw model context, HTTP bodies, or full tool results.
+Semantic evidence is under `.runtime/evidence/semantic-git-uat/`. The Session safe live report is under `.runtime/sources/session-agent-runtime/target/live-reports/`. Evidence contains IDs, revisions, generation IDs, state, tool order, outcomes, and available usage only. It must not contain credentials, source payloads, questions, prompts, raw model context, HTTP bodies, or full tool results.
 
 ## Add a repository
 
