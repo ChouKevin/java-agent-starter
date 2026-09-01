@@ -210,7 +210,7 @@ same_revision_rebuild() {
     rebuild="$(jq -cn --argjson current "${before}" '{authorizeIncompatibleSchema:true,expectedCurrent:$current}')"
     submit_and_wait payment-service rebuild "${rebuild}" >/dev/null
     after="$(publication payment-service | pointer)"
-    jq -e --argjson before "${before}" --argjson after "${after}" \
+    jq -ne --argjson before "${before}" --argjson after "${after}" \
         '$before.revision == $after.revision and $before.generationId != $after.generationId' >/dev/null \
         || uat_fail "same-revision rebuild did not change only the generation"
     query_assert_success rebuild-cold GET "/v1/repositories/payment-service/entry-points?revision=${payment_revision}"

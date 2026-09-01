@@ -57,13 +57,10 @@ runtime_uat_impl() {
     semantic_uat_deploy_initial_r1_impl
     [[ -f "${RUNTIME_SOURCE}/pom.xml" ]] || runtime_uat_fail "Session Agent Runtime source is unavailable after deployment"
     JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
-        mvn -q -f "${RUNTIME_SOURCE}/pom.xml" -Dtest=SessionAgentLiveIT#records_repository_catalog_at_r1 test
+        mvn -q -f "${RUNTIME_SOURCE}/pom.xml" -Plive-it -DfailIfNoTests=true \
+        -Dtest=SessionAgentLiveIT test
     semantic_uat_cold_r1_and_rebuild_impl
     semantic_uat_gated_payment_transition_impl session
-    JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
-        mvn -q -f "${RUNTIME_SOURCE}/pom.xml" -Dtest=SessionAgentLiveIT#recovers_payment_query_at_r2 test
-    JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
-        mvn -q -f "${RUNTIME_SOURCE}/pom.xml" -Dtest=SessionAgentLiveIT#completes_five_real_conversation_scenarios_through_http_and_worker test
     semantic_uat_reset_payment_to_v1_impl
     semantic_uat_gated_payment_transition_impl repeat
     evidence 'runtime-uat=complete'

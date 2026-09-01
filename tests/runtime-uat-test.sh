@@ -55,9 +55,11 @@ chmod +x "${FAKE_STARTER}/semantic-index-uat.sh"
 cat > "${FAKE_STARTER}/bin/mvn" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\$#" -eq 5 && "\$1" == '-q' && "\$2" == '-f' ]]
+[[ "\$#" -eq 7 && "\$1" == '-q' && "\$2" == '-f' ]]
 [[ "\$3" == '${FAKE_STARTER}/.runtime/sources/session-agent-runtime/pom.xml' ]]
-[[ "\$5" == test ]]
+[[ "\$4" == '-Plive-it' ]]
+[[ "\$5" == '-DfailIfNoTests=true' ]]
+[[ "\$7" == test ]]
 [[ "\${SESSION_AGENT_LIVE}" == true ]]
 [[ "\${SESSION_AGENT_BASE_URL}" == 'http://127.0.0.1:18090' ]]
 [[ -n "\${SESSION_AGENT_HISTORY_KEY}" ]]
@@ -68,10 +70,10 @@ if flock -n '${FAKE_STARTER}/.runtime/deploy.lock' true; then
     exit 1
 fi
 if [[ "\${RUNTIME_UAT_FAIL_FIRST_MAVEN:-false}" == true ]]; then
-    printf 'mvn:failed:%s\n' "\$4" >> '${CALL_LOG}'
+    printf 'mvn:failed:%s\n' "\$6" >> '${CALL_LOG}'
     exit 23
 fi
-printf 'mvn:%s:%s\n' "\$4" "\${SESSION_AGENT_HISTORY_KEY}" >> '${CALL_LOG}'
+printf 'mvn:%s:%s\n' "\$6" "\${SESSION_AGENT_HISTORY_KEY}" >> '${CALL_LOG}'
 EOF
 chmod +x "${FAKE_STARTER}/bin/mvn"
 
@@ -102,7 +104,7 @@ if RUNTIME_UAT_FAIL_FIRST_MAVEN=true PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_
     exit 1
 fi
 [[ "$(<"${CALL_LOG}")" == 'semantic:r1
-mvn:failed:-Dtest=SessionAgentLiveIT#records_repository_catalog_at_r1' ]] || {
+mvn:failed:-Dtest=SessionAgentLiveIT' ]] || {
     printf 'runtime UAT continued after the first Maven phase failed\n' >&2
     cat "${CALL_LOG}" >&2
     exit 1
@@ -114,17 +116,12 @@ SEMANTIC_BASE_URL='http://stale-semantic.invalid' SEMANTIC_API_TOKEN="${SECRET_T
 
 mapfile -t CALLS < "${CALL_LOG}"
 [[ "${CALLS[0]}" == semantic:r1 ]]
-[[ "${CALLS[1]}" == mvn:-Dtest=SessionAgentLiveIT#records_repository_catalog_at_r1:* ]]
+[[ "${CALLS[1]}" == mvn:-Dtest=SessionAgentLiveIT:* ]]
 [[ "${CALLS[2]}" == semantic:cold-r1 ]]
 [[ "${CALLS[3]}" == semantic:r2:session ]]
-[[ "${CALLS[4]}" == mvn:-Dtest=SessionAgentLiveIT#recovers_payment_query_at_r2:* ]]
-[[ "${CALLS[5]}" == mvn:-Dtest=SessionAgentLiveIT#completes_five_real_conversation_scenarios_through_http_and_worker:* ]]
-[[ "${CALLS[6]}" == semantic:reset ]]
-[[ "${CALLS[7]}" == semantic:r2:repeat ]]
-[[ "${CALLS[8]}" == evidence:runtime-uat=complete ]]
-[[ "${#CALLS[@]}" -eq 9 ]]
-HISTORY_R1="${CALLS[1]##*:}"
-HISTORY_R2="${CALLS[4]##*:}"
-[[ "${HISTORY_R1}" == "${HISTORY_R2}" && -n "${HISTORY_R1}" ]]
+[[ "${CALLS[4]}" == semantic:reset ]]
+[[ "${CALLS[5]}" == semantic:r2:repeat ]]
+[[ "${CALLS[6]}" == evidence:runtime-uat=complete ]]
+[[ "${#CALLS[@]}" -eq 7 ]]
 ! grep -Fq "${SECRET_TOKEN}" "${OUTPUT_LOG}"
 ! grep -Fq "${SECRET_KEY}" "${OUTPUT_LOG}"

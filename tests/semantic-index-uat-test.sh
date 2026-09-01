@@ -45,6 +45,51 @@ source "${UAT_SCRIPT}"
 EVIDENCE_DIRECTORY="${TEMPORARY_DIRECTORY}/evidence"
 mkdir -p "${EVIDENCE_DIRECTORY}"
 
+pointer_counter="${TEMPORARY_DIRECTORY}/pointer-counter"
+rebuild_query_marker="${TEMPORARY_DIRECTORY}/rebuild-query-complete"
+open_stdin="${TEMPORARY_DIRECTORY}/open-stdin"
+printf '0\n' > "${pointer_counter}"
+mkfifo "${open_stdin}"
+sleep 10 > "${open_stdin}" &
+stdin_holder=$!
+set +e
+timeout 2 bash -c '
+    source "$1"
+    pointer_counter="$2"
+    rebuild_query_marker="$3"
+    publication() {
+        local call
+        call="$(<"${pointer_counter}")"
+        if [[ "${call}" == 0 ]]; then
+            printf "%s\n" '\''{"revision":"1111111111111111111111111111111111111111","generationId":"generation-1"}'\''
+        else
+            printf "%s\n" '\''{"revision":"1111111111111111111111111111111111111111","generationId":"generation-2"}'\''
+        fi
+        printf "%s\n" "$((call + 1))" > "${pointer_counter}"
+    }
+    pointer() { cat; }
+    submit_and_wait() { :; }
+    query_assert_success() {
+        [[ "$1" == rebuild-cold ]]
+        [[ "$2" == GET ]]
+        [[ "$3" == /v1/repositories/payment-service/entry-points?revision=1111111111111111111111111111111111111111 ]]
+        touch "${rebuild_query_marker}"
+    }
+    same_revision_rebuild
+' _ "${UAT_SCRIPT}" "${pointer_counter}" "${rebuild_query_marker}" < "${open_stdin}"
+rebuild_status=$?
+set -e
+kill "${stdin_holder}" 2>/dev/null || true
+wait "${stdin_holder}" 2>/dev/null || true
+[[ "${rebuild_status}" -eq 0 ]] || {
+    printf 'same-revision rebuild verification waited for stdin\n' >&2
+    exit 1
+}
+[[ -e "${rebuild_query_marker}" ]] || {
+    printf 'same-revision rebuild did not verify the rebuilt generation through Query\n' >&2
+    exit 1
+}
+
 make_fixture_remote() {
     local repository="$1" remote="${UAT_GIT_ROOT}/${1}.git" checkout="${TEMPORARY_DIRECTORY}/${1}-fixture"
     git init --quiet --bare "${remote}"
