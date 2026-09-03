@@ -110,6 +110,8 @@ FAKE_RUNTIME_JOB_1_RETRY="$(printenv FAKE_RUNTIME_JOB_1_RETRY || true)"
 FAKE_RUNTIME_BLANK_SOURCE_CODE="$(printenv FAKE_RUNTIME_BLANK_SOURCE_CODE || true)"
 FAKE_RUNTIME_BLANK_FIRST_ASSISTANT="$(printenv FAKE_RUNTIME_BLANK_FIRST_ASSISTANT || true)"
 FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT="$(printenv FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT || true)"
+FAKE_RUNTIME_REUSED_TOOL_CALL_ID="$(printenv FAKE_RUNTIME_REUSED_TOOL_CALL_ID || true)"
+FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE="$(printenv FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE || true)"
 method=GET
 body=
 url=
@@ -185,9 +187,19 @@ case "$url" in
         if (( count <= 1 )) || [[ "$FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY" == true ]]; then
             cat <<'JSON' | jq --arg blank_source "$FAKE_RUNTIME_BLANK_SOURCE_CODE" \
                 --arg blank_first_assistant "$FAKE_RUNTIME_BLANK_FIRST_ASSISTANT" \
-                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" '
+                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" \
+                --arg reused_tool_call_id "$FAKE_RUNTIME_REUSED_TOOL_CALL_ID" \
+                --arg independent_source_evidence "$FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE" '
                 map(
-                    if $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
+                    if $independent_source_evidence == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls += [{toolCallId:"other-source-call",toolName:"semantic_search_code",arguments:{repositoryId:"order-service",revision:"order-revision-7",query:"payment methods"}}]
+                    elif $independent_source_evidence == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .output = {isError:true,result:{code:"TOOL_CONNECTION_FAILED"}}
+                    elif $reused_tool_call_id == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls |= map(if .toolCallId == "source-call" then .toolCallId = "catalog-call" else . end)
+                    elif $reused_tool_call_id == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .toolCallId = "catalog-call"
+                    elif $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
                         .output.result.items[0].source.code = " \t "
                     elif $blank_first_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-1" then
                         .message = " \t "
@@ -196,15 +208,29 @@ case "$url" in
                     else .
                     end
                 )
+                | if $independent_source_evidence == "true" then
+                    .[0:4] + [{sequence:99,type:"TOOL",messageJobId:"job-1",toolCallId:"other-source-call",toolName:"semantic_search_code",output:{isError:false,result:{repositoryId:"order-service",revision:"order-revision-7",items:[{source:{code:"public OrderPaymentMethod supported() { return CARD; }"}}]}}}] + .[4:]
+                  else .
+                  end
 '
 [{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"}]
 JSON
         else
             cat <<'JSON' | jq --arg blank_source "$FAKE_RUNTIME_BLANK_SOURCE_CODE" \
                 --arg blank_first_assistant "$FAKE_RUNTIME_BLANK_FIRST_ASSISTANT" \
-                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" '
+                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" \
+                --arg reused_tool_call_id "$FAKE_RUNTIME_REUSED_TOOL_CALL_ID" \
+                --arg independent_source_evidence "$FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE" '
                 map(
-                    if $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
+                    if $independent_source_evidence == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls += [{toolCallId:"other-source-call",toolName:"semantic_search_code",arguments:{repositoryId:"order-service",revision:"order-revision-7",query:"payment methods"}}]
+                    elif $independent_source_evidence == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .output = {isError:true,result:{code:"TOOL_CONNECTION_FAILED"}}
+                    elif $reused_tool_call_id == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls |= map(if .toolCallId == "source-call" then .toolCallId = "catalog-call" else . end)
+                    elif $reused_tool_call_id == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .toolCallId = "catalog-call"
+                    elif $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
                         .output.result.items[0].source.code = " \t "
                     elif $blank_first_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-1" then
                         .message = " \t "
@@ -213,6 +239,10 @@ JSON
                     else .
                     end
                 )
+                | if $independent_source_evidence == "true" then
+                    .[0:4] + [{sequence:99,type:"TOOL",messageJobId:"job-1",toolCallId:"other-source-call",toolName:"semantic_search_code",output:{isError:false,result:{repositoryId:"order-service",revision:"order-revision-7",items:[{source:{code:"public OrderPaymentMethod supported() { return CARD; }"}}]}}}] + .[4:]
+                  else .
+                  end
 '
 [{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"},{"sequence":6,"type":"USER","messageJobId":"job-2","participantId":"live-uat","message":"這些付款方式的手續費能否只看程式碼就確定？若不能，請說明缺少哪類執行期資料。"},{"sequence":7,"type":"ASSISTANT","messageJobId":"job-2","message":"無法僅由程式碼確定；還需要目前的費率設定。"}]
 JSON
@@ -233,6 +263,13 @@ fi
 [[ ! -e "$CALL_LOG" ]] || { printf 'runtime UAT deployed with a blank model credential\n' >&2; exit 1; }
 
 sed -i "s/^GOOGLE_API_KEY=$/GOOGLE_API_KEY=$SECRET_KEY/" "$FAKE_STARTER/.env"
+sed -i "s/^GOOGLE_API_KEY=$SECRET_KEY$/GOOGLE_API_KEY=   /" "$FAKE_STARTER/.env"
+if SESSION_AGENT_LIVE=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted a whitespace-only configured model credential\n' >&2
+    exit 1
+fi
+[[ ! -e "$CALL_LOG" ]] || { printf 'runtime UAT deployed with a whitespace-only model credential\n' >&2; exit 1; }
+sed -i 's/^GOOGLE_API_KEY=   $/GOOGLE_API_KEY=google-uat-key/' "$FAKE_STARTER/.env"
 if run_runtime env -u SESSION_AGENT_LIVE > "$OUTPUT_LOG" 2>&1; then
     printf 'runtime UAT silently opted in without exported SESSION_AGENT_LIVE=true\n' >&2
     exit 1
@@ -287,6 +324,18 @@ grep -Fq 'result=pass' "$EVIDENCE_DIRECTORY/structural-report.txt"
 ! grep -R -Fq "$SECRET_TOKEN" "$EVIDENCE_DIRECTORY"
 ! grep -Fq "$SECRET_KEY" "$OUTPUT_LOG"
 ! grep -Fq "$SECRET_TOKEN" "$OUTPUT_LOG"
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_REUSED_TOOL_CALL_ID=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted tool call ID reuse across tool names\n' >&2
+    exit 1
+fi
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted unpaired payment source evidence\n' >&2
+    exit 1
+fi
 
 for blank_case in source first-assistant follow-up-assistant; do
     rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"

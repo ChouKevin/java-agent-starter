@@ -126,12 +126,14 @@ assert_complete_tool_pairing() {
             and (.arguments | type == "object"))
         and all($tools[]; (.toolCallId | type == "string" and length > 0)
             and (.toolName | type == "string" and length > 0))
+        and ([$calls[] | .toolCallId] | unique | length) == ($calls | length)
+        and ([$tools[] | .toolCallId] | unique | length) == ($tools | length)
         and all($calls[]; . as $call
-            | ([$calls[] | select(.toolCallId == $call.toolCallId and .toolName == $call.toolName)] | length) == 1
+            | ([$tools[] | select(.toolCallId == $call.toolCallId)] | length) == 1
             and ([$tools[] | select(.toolCallId == $call.toolCallId and .toolName == $call.toolName)] | length) == 1)
         and all($tools[]; . as $tool
-            | ([$calls[] | select(.toolCallId == $tool.toolCallId and .toolName == $tool.toolName)] | length) == 1
-            and ([$tools[] | select(.toolCallId == $tool.toolCallId and .toolName == $tool.toolName)] | length) == 1)
+            | ([$calls[] | select(.toolCallId == $tool.toolCallId)] | length) == 1
+            and ([$calls[] | select(.toolCallId == $tool.toolCallId and .toolName == $tool.toolName)] | length) == 1)
     ' <<< "$history" >/dev/null
 }
 
@@ -141,18 +143,21 @@ assert_first_turn_history() {
 
     assert_complete_tool_pairing "$history" || return 1
     jq -e --arg semantic_revision "$semantic_revision" '
-        type == "array"
+        . as $history
+        | type == "array"
         and length > 0
-        and any(.[] | select(.type == "ASSISTANT_TOOL_CALLS") | .calls[]?;
-            (.toolName | type == "string" and startswith("semantic_")))
-        and any(.[] | select(.type == "ASSISTANT_TOOL_CALLS") | .calls[]?;
-            (.arguments | type == "object")
-            and .arguments.repositoryId == "payment-service"
-            and .arguments.revision == $semantic_revision)
-        and any(.[] | select(.type == "TOOL");
-            (.output | type == "object")
-            and .output.isError == false
-            and ([.output | .. | objects | .code? | strings | select(test("[^[:space:]]"))] | length > 0))
+        and any($history[] | select(.type == "ASSISTANT_TOOL_CALLS") | .calls[]?;
+            . as $call
+            | ($call.toolName | type == "string" and startswith("semantic_"))
+            and ($call.arguments | type == "object")
+            and $call.arguments.repositoryId == "payment-service"
+            and $call.arguments.revision == $semantic_revision
+            and any($history[] | select(.type == "TOOL");
+                .toolCallId == $call.toolCallId
+                and .toolName == $call.toolName
+                and (.output | type == "object")
+                and .output.isError == false
+                and ([.output | .. | objects | .code? | strings | select(test("[^[:space:]]"))] | length > 0)))
         and (.[-1].type == "ASSISTANT")
         and (.[-1].message | type == "string" and test("[^[:space:]]"))
     ' <<< "$history" >/dev/null
@@ -290,7 +295,7 @@ runtime_uat_main() {
     live_opt_in="$(printenv SESSION_AGENT_LIVE || true)"
     [[ "$live_opt_in" == true ]] || { runtime_uat_fail 'SESSION_AGENT_LIVE=true must be exported'; return 1; }
     model_key="$(runtime_env_value GOOGLE_API_KEY)"
-    [[ -n "$model_key" ]] || { runtime_uat_fail 'GOOGLE_API_KEY is blank'; return 1; }
+    [[ "$model_key" =~ [^[:space:]] ]] || { runtime_uat_fail 'GOOGLE_API_KEY is blank'; return 1; }
     command -v jq >/dev/null 2>&1 || { runtime_uat_fail 'jq is required'; return 1; }
     with_deploy_lock runtime_uat_impl
 }
