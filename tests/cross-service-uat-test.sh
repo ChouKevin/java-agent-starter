@@ -7,7 +7,8 @@ FAKE_STARTER="${TEMPORARY_DIRECTORY}/starter"
 CALL_LOG="${TEMPORARY_DIRECTORY}/calls.log"
 OUTPUT_LOG="${TEMPORARY_DIRECTORY}/output.log"
 SECRET_TOKEN='semantic-uat-token'
-export CALL_LOG SECRET_TOKEN
+SYSTEM_CP="$(command -v cp)"
+export CALL_LOG SECRET_TOKEN SYSTEM_CP
 
 cleanup() { rm -rf -- "${TEMPORARY_DIRECTORY}"; }
 trap cleanup EXIT
@@ -93,7 +94,9 @@ case "${arguments}" in
         printf 'semantic:started-no-runtime\n' >> "${CALL_LOG}"
         ;;
     *' ps -q session-agent-runtime')
-        if [[ "${CROSS_SERVICE_UAT_RUNTIME_CONTAINER_CHANGES:-false}" == true ]]; then
+        if [[ "${CROSS_SERVICE_UAT_FAIL_RUNTIME_CONTAINER_READ:-false}" == true ]]; then
+            exit 61
+        elif [[ "${CROSS_SERVICE_UAT_RUNTIME_CONTAINER_CHANGES:-false}" == true ]]; then
             count_file="${CROSS_SERVICE_UAT_TEST_TEMPORARY_DIRECTORY}/runtime-container-id-count"
             count=0
             [[ -f "${count_file}" ]] && count="$(<"${count_file}")"
@@ -151,13 +154,28 @@ esac
 EOF
 chmod +x "${FAKE_STARTER}/bin/curl"
 
+cat > "${FAKE_STARTER}/bin/cp" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fake_root="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
+if [[ "${CROSS_SERVICE_UAT_FAIL_FIXTURE_EVIDENCE:-false}" == true \
+    && "$1" == -R \
+    && "$2" == "${fake_root}/.runtime/evidence/semantic-git-uat" ]]; then
+    "${SYSTEM_CP}" "$@"
+    exit 53
+fi
+exec "${SYSTEM_CP}" "$@"
+EOF
+chmod +x "${FAKE_STARTER}/bin/cp"
+
 cat > "${FAKE_STARTER}/bin/mvn" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 fake_root="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 if [[ "$3" == "${fake_root}/.runtime/sources/java-code-intelligence/pom.xml" ]]; then
-    [[ "$#" -eq 8 && "$1" == -q && "$2" == -f && "$4" == -pl && "$5" == semantic-query ]]
-    [[ "$6" == -Pdeployed-it && "$7" == -DfailIfNoTests=true && "$8" == test ]]
+    [[ "$#" -eq 11 && "$1" == -q && "$2" == -f && "$4" == -pl && "$5" == semantic-query && "$6" == -am ]]
+    [[ "$7" == -Pdeployed-it && "$8" == -Dtest=SemanticDeploymentIT && "$9" == -DfailIfNoTests=true \
+        && "${10}" == -Dsurefire.failIfNoSpecifiedTests=false && "${11}" == test ]]
     [[ "${SEMANTIC_BASE_URL}" == http://127.0.0.1:18080 && "${SEMANTIC_API_TOKEN}" == "${SECRET_TOKEN}" ]]
     [[ "${SEMANTIC_UAT_REPOSITORY}" == payment-service ]]
     if [[ "${CROSS_SERVICE_UAT_FAIL_SEMANTIC:-false}" == true ]]; then
@@ -206,6 +224,41 @@ wait "${LOCK_HOLDER_PID}"
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+if CROSS_SERVICE_UAT_FAIL_FIXTURE_EVIDENCE=true PATH="${FAKE_STARTER}/bin:${PATH}" \
+    "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
+    printf 'cross-service UAT returned success after fixture evidence copy failed\n' >&2
+    exit 1
+fi
+mapfile -t FIXTURE_FAILURE_CALLS < "${CALL_LOG}"
+[[ "${FIXTURE_FAILURE_CALLS[*]}" == *'fixtures:published'* \
+    && "${FIXTURE_FAILURE_CALLS[*]}" != *'semantic:stopped'* ]] || {
+    printf 'cross-service UAT continued after fixture evidence copy failed\n' >&2
+    exit 1
+}
+grep -R -Fxq 'stage=fixture-evidence' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
+    printf 'cross-service UAT did not identify fixture-evidence as the failed stage\n' >&2
+    exit 1
+}
+
+: > "${CALL_LOG}"
+rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+if CROSS_SERVICE_UAT_FAIL_RUNTIME_CONTAINER_READ=true PATH="${FAKE_STARTER}/bin:${PATH}" \
+    "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
+    printf 'cross-service UAT returned success after the pre-recovery Runtime ID read failed\n' >&2
+    exit 1
+fi
+mapfile -t RUNTIME_ID_READ_FAILURE_CALLS < "${CALL_LOG}"
+[[ "${RUNTIME_ID_READ_FAILURE_CALLS[*]}" != *'semantic:started-no-runtime'* ]] || {
+    printf 'cross-service UAT continued after the pre-recovery Runtime ID read failed\n' >&2
+    exit 1
+}
+grep -R -Fxq 'stage=runtime-container-before' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
+    printf 'cross-service UAT did not identify the pre-recovery Runtime ID stage\n' >&2
+    exit 1
+}
+
+: > "${CALL_LOG}"
+rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
 if CROSS_SERVICE_UAT_RUNTIME_CONTAINER_CHANGES=true PATH="${FAKE_STARTER}/bin:${PATH}" \
     "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
     printf 'cross-service UAT returned success after Runtime recreation during Semantic recovery\n' >&2
@@ -214,6 +267,10 @@ fi
 mapfile -t RESTART_FAILURE_CALLS < "${CALL_LOG}"
 [[ "${RESTART_FAILURE_CALLS[*]}" != *'mvn:semantic:deployed-it'* && "${RESTART_FAILURE_CALLS[*]}" != *'mvn:runtime:fake-backed'* ]] || {
     printf 'cross-service UAT continued after Runtime container changed\n' >&2
+    exit 1
+}
+grep -R -Fxq 'stage=runtime-container-stable' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
+    printf 'cross-service UAT did not identify the Runtime stability stage\n' >&2
     exit 1
 }
 

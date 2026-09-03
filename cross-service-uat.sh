@@ -63,10 +63,17 @@ capture_cross_service_failure() {
 }
 
 run_cross_service_stage() {
-    local stage="$1"
+    local stage="$1" stage_status
     shift
     CROSS_SERVICE_UAT_STAGE="${stage}"
-    if ( "$@" ); then
+    set +e
+    (
+        set -eE -o pipefail
+        "$@"
+    )
+    stage_status=$?
+    set -e
+    if (( stage_status == 0 )); then
         cross_evidence "stage=${stage} result=complete"
         return 0
     fi
@@ -111,6 +118,32 @@ start_semantic_without_runtime_recreation() {
     "${COMPOSE[@]}" up -d --no-recreate semantic-query semantic-query-gateway
 }
 
+capture_runtime_container_before() {
+    local runtime_container_before
+    runtime_container_before="$("${COMPOSE[@]}" ps -q session-agent-runtime)" || {
+        cross_service_uat_fail 'Runtime container id could not be read before Semantic recovery'
+        return 1
+    }
+    [[ -n "${runtime_container_before}" ]] \
+        || cross_service_uat_fail 'Runtime container id is unavailable before Semantic recovery'
+    printf '%s\n' "${runtime_container_before}" > "${CROSS_SERVICE_EVIDENCE_DIRECTORY}/runtime-container-before.txt"
+    cross_evidence "stage=runtime-container-before id=${runtime_container_before}"
+}
+
+verify_runtime_container_stable() {
+    local runtime_container_before runtime_container_after
+    [[ -f "${CROSS_SERVICE_EVIDENCE_DIRECTORY}/runtime-container-before.txt" ]] \
+        || cross_service_uat_fail 'Runtime container id is unavailable before Semantic recovery'
+    runtime_container_before="$(<"${CROSS_SERVICE_EVIDENCE_DIRECTORY}/runtime-container-before.txt")"
+    runtime_container_after="$("${COMPOSE[@]}" ps -q session-agent-runtime)" || {
+        cross_service_uat_fail 'Runtime container id could not be read after Semantic recovery'
+        return 1
+    }
+    [[ "${runtime_container_before}" == "${runtime_container_after}" ]] \
+        || cross_service_uat_fail 'Runtime container changed during Semantic recovery'
+    cross_evidence 'stage=runtime-container-stable result=complete'
+}
+
 run_semantic_deployed_it() {
     local semantic_port semantic_token
     semantic_port="$(env_or_default SEMANTIC_HOST_PORT 8080)"
@@ -121,8 +154,9 @@ run_semantic_deployed_it() {
     SEMANTIC_BASE_URL="http://127.0.0.1:${semantic_port}" \
         SEMANTIC_API_TOKEN="${semantic_token}" \
         SEMANTIC_UAT_REPOSITORY=payment-service \
-        mvn -q -f "${SOURCES_DIR}/java-code-intelligence/pom.xml" -pl semantic-query \
-            -Pdeployed-it -DfailIfNoTests=true test
+        mvn -q -f "${SOURCES_DIR}/java-code-intelligence/pom.xml" -pl semantic-query -am \
+            -Pdeployed-it -Dtest=SemanticDeploymentIT -DfailIfNoTests=true \
+            -Dsurefire.failIfNoSpecifiedTests=false test
 }
 
 run_runtime_fake_backed_tests() {
@@ -135,7 +169,7 @@ run_runtime_fake_backed_tests() {
 }
 
 cross_service_uat_impl() {
-    local runtime_port runtime_container_before runtime_container_after
+    local runtime_port
     prepare_cross_service_evidence
     runtime_port="$(env_or_default SESSION_AGENT_HOST_PORT 8090)"
     COMPOSE=(docker compose --project-name java-agent-uat --env-file "${ENV_FILE}" -f "${ROOT}/compose.yaml")
@@ -145,30 +179,10 @@ cross_service_uat_impl() {
     run_cross_service_stage stop-semantic "${COMPOSE[@]}" stop semantic-query-gateway semantic-query
     run_cross_service_stage recreate-runtime force_recreate_runtime_without_semantic
     run_cross_service_stage runtime-health wait_for_runtime_health "${runtime_port}"
-    if ! runtime_container_before="$("${COMPOSE[@]}" ps -q session-agent-runtime)"; then
-        capture_cross_service_failure
-        cross_service_uat_fail 'Runtime container id could not be read before Semantic recovery'
-        return 1
-    fi
-    [[ -n "${runtime_container_before}" ]] || {
-        capture_cross_service_failure
-        cross_service_uat_fail 'Runtime container id is unavailable before Semantic recovery'
-        return 1
-    }
-    cross_evidence "stage=runtime-container-before id=${runtime_container_before}"
+    run_cross_service_stage runtime-container-before capture_runtime_container_before
     run_cross_service_stage start-semantic start_semantic_without_runtime_recreation
     run_cross_service_stage semantic-catalog wait_for_semantic_catalog "${runtime_port}"
-    if ! runtime_container_after="$("${COMPOSE[@]}" ps -q session-agent-runtime)"; then
-        capture_cross_service_failure
-        cross_service_uat_fail 'Runtime container id could not be read after Semantic recovery'
-        return 1
-    fi
-    [[ "${runtime_container_before}" == "${runtime_container_after}" ]] || {
-        capture_cross_service_failure
-        cross_service_uat_fail 'Runtime container changed during Semantic recovery'
-        return 1
-    }
-    cross_evidence 'stage=runtime-container-stable result=complete'
+    run_cross_service_stage runtime-container-stable verify_runtime_container_stable
     run_cross_service_stage semantic-deployed-it run_semantic_deployed_it
     run_cross_service_stage runtime-fake-backed-tests run_runtime_fake_backed_tests
     cross_evidence 'cross-service-mcp=complete'
