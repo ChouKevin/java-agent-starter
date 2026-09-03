@@ -129,9 +129,11 @@ assert_fixture_revision() {
 }
 
 assert_flat_collection() {
-    local label="$1" response="$2"
-    jq -e '
+    local label="$1" response="$2" repository_id="$3" revision="$4"
+    jq -e --arg repository_id "${repository_id}" --arg revision "${revision}" '
         type == "object"
+        and .repositoryId == $repository_id
+        and .revision == $revision
         and (.items | type == "array")
         and (.page | type == "object"
             and (.offset | type == "number" and . >= 0)
@@ -188,7 +190,7 @@ assert_query_is_cold() {
 }
 
 exercise_representative_query_flow() {
-    local payment_revision="$1" catalog repository payment_search fact_source api_routes callers fact_id source_code
+    local payment_revision="$1" catalog repository payment_search fact_source api_routes callers method_result fact_id source_code
     catalog="$(query GET /api/v1/repositories)" || uat_fail "repository catalog request failed"
     assert_repository_catalog "${catalog}"
     jq -e --arg revision "${payment_revision}" '
@@ -206,10 +208,12 @@ exercise_representative_query_flow() {
     payment_search="$(query POST /api/v1/search-code "$(jq -cn --arg revision "${payment_revision}" \
         '{repositoryId:"payment-service",revision:$revision,query:"Payment",kinds:["METHOD"]}')")" \
         || uat_fail "payment code search failed"
-    assert_flat_collection search-code "${payment_search}"
-    fact_id="$(jq -er '.items[0].factId | select(type == "string" and length > 0)' <<< "${payment_search}")" \
-        || uat_fail "payment code search returned no fact id"
-    source_code="$(jq -er '.items[0].source.code | select(type == "string" and length > 0)' <<< "${payment_search}")" \
+    assert_flat_collection search-code "${payment_search}" payment-service "${payment_revision}"
+    method_result="$(jq -ce 'first(.items[] | select(.kind == "METHOD")) // error("missing METHOD result")' <<< "${payment_search}")" \
+        || uat_fail "payment code search returned no METHOD result"
+    fact_id="$(jq -er '.factId | select(type == "string" and length > 0)' <<< "${method_result}")" \
+        || uat_fail "payment code search METHOD result returned no fact id"
+    source_code="$(jq -er '.source.code | select(type == "string" and length > 0)' <<< "${method_result}")" \
         || uat_fail "payment code search returned no exact source"
 
     fact_source="$(query POST /api/v1/fact-source "$(jq -cn --arg revision "${payment_revision}" --arg fact_id "${fact_id}" \
@@ -225,12 +229,12 @@ exercise_representative_query_flow() {
     api_routes="$(query POST /api/v1/api-routes "$(jq -cn --arg revision "${payment_revision}" \
         '{repositoryId:"payment-service",revision:$revision,httpMethod:"GET",path:"/payments"}')")" \
         || uat_fail "payment API route request failed"
-    assert_flat_collection api-routes "${api_routes}"
+    assert_flat_collection api-routes "${api_routes}" payment-service "${payment_revision}"
 
     callers="$(query POST /api/v1/callers "$(jq -cn --arg revision "${payment_revision}" --arg fact_id "${fact_id}" \
         '{repositoryId:"payment-service",revision:$revision,methodFactId:$fact_id}')")" \
         || uat_fail "payment caller request failed"
-    assert_flat_collection callers "${callers}"
+    assert_flat_collection callers "${callers}" payment-service "${payment_revision}"
     evidence "query=representative-flow repository=payment-service revision=${payment_revision} result=accepted"
 }
 

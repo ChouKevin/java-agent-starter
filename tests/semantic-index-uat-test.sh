@@ -171,8 +171,13 @@ revision='1111111111111111111111111111111111111111'
 expected_current_revision='2222222222222222222222222222222222222222'
 expected_fact_id='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 expected_source_code='public Money calculate() {}'
+search_result_shape='method-only'
+collection_target=''
+collection_repository_id='payment-service'
+collection_revision="${revision}"
+caller_method_fact_id_file="${TEMPORARY_DIRECTORY}/caller-method-fact-id"
 query() {
-    local method="$1" path="$2" body="${3:-}"
+    local method="$1" path="$2" body="${3:-}" response_repository_id response_revision requested_fact_id
     case "${method} ${path}" in
         'GET /api/v1/repositories')
             record repositories
@@ -185,22 +190,47 @@ query() {
         'POST /api/v1/search-code')
             jq -e --arg revision "${revision}" '.repositoryId == "payment-service" and .revision == $revision and .query == "Payment" and .kinds == ["METHOD"]' <<< "${body}" >/dev/null
             record search-code
-            jq -cn --arg revision "${revision}" --arg fact_id "${expected_fact_id}" --arg code "${expected_source_code}" '{repositoryId:"payment-service",revision:$revision,items:[{factId:$fact_id,kind:"METHOD",displayName:"calculate",source:{path:"src/main/java/com/example/payment/PaymentFeeCalculator.java",startLine:1,endLine:1,code:$code}}],page:{offset:0,limit:20,returned:1,total:1,hasMore:false}}'
+            response_repository_id='payment-service'
+            response_revision="${revision}"
+            if [[ "${collection_target}" == search-code ]]; then
+                response_repository_id="${collection_repository_id}"
+                response_revision="${collection_revision}"
+            fi
+            if [[ "${search_result_shape}" == leading-class ]]; then
+                jq -cn --arg repository_id "${response_repository_id}" --arg revision "${response_revision}" --arg fact_id "${expected_fact_id}" --arg code "${expected_source_code}" '{repositoryId:$repository_id,revision:$revision,items:[{factId:"class-fact",kind:"CLASS",displayName:"PaymentFeeCalculator",source:{path:"src/main/java/com/example/payment/PaymentFeeCalculator.java",startLine:1,endLine:1,code:$code}},{factId:$fact_id,kind:"METHOD",displayName:"calculate",source:{path:"src/main/java/com/example/payment/PaymentFeeCalculator.java",startLine:1,endLine:1,code:$code}}],page:{offset:0,limit:20,returned:2,total:2,hasMore:false}}'
+            else
+                jq -cn --arg repository_id "${response_repository_id}" --arg revision "${response_revision}" --arg fact_id "${expected_fact_id}" --arg code "${expected_source_code}" '{repositoryId:$repository_id,revision:$revision,items:[{factId:$fact_id,kind:"METHOD",displayName:"calculate",source:{path:"src/main/java/com/example/payment/PaymentFeeCalculator.java",startLine:1,endLine:1,code:$code}}],page:{offset:0,limit:20,returned:1,total:1,hasMore:false}}'
+            fi
             ;;
         'POST /api/v1/fact-source')
-            jq -e --arg revision "${revision}" --arg fact_id "${expected_fact_id}" '.repositoryId == "payment-service" and .revision == $revision and .factId == $fact_id' <<< "${body}" >/dev/null
+            requested_fact_id="$(jq -er '.factId | select(type == "string" and length > 0)' <<< "${body}")"
+            jq -e --arg revision "${revision}" '.repositoryId == "payment-service" and .revision == $revision' <<< "${body}" >/dev/null
             record fact-source
-            jq -cn --arg revision "${revision}" --arg fact_id "${expected_fact_id}" --arg code "${expected_source_code}" '{repositoryId:"payment-service",revision:$revision,factId:$fact_id,source:{path:"src/main/java/com/example/payment/PaymentFeeCalculator.java",startLine:1,endLine:1,code:$code},factRange:{startLine:1,endLine:1}}'
+            jq -cn --arg revision "${revision}" --arg fact_id "${requested_fact_id}" --arg code "${expected_source_code}" '{repositoryId:"payment-service",revision:$revision,factId:$fact_id,source:{path:"src/main/java/com/example/payment/PaymentFeeCalculator.java",startLine:1,endLine:1,code:$code},factRange:{startLine:1,endLine:1}}'
             ;;
         'POST /api/v1/api-routes')
             jq -e --arg revision "${revision}" '.repositoryId == "payment-service" and .revision == $revision and .httpMethod == "GET" and .path == "/payments"' <<< "${body}" >/dev/null
             record api-routes
-            jq -cn --arg revision "${revision}" '{repositoryId:"payment-service",revision:$revision,items:[],page:{offset:0,limit:20,returned:0,total:0,hasMore:false}}'
+            response_repository_id='payment-service'
+            response_revision="${revision}"
+            if [[ "${collection_target}" == api-routes ]]; then
+                response_repository_id="${collection_repository_id}"
+                response_revision="${collection_revision}"
+            fi
+            jq -cn --arg repository_id "${response_repository_id}" --arg revision "${response_revision}" '{repositoryId:$repository_id,revision:$revision,items:[],page:{offset:0,limit:20,returned:0,total:0,hasMore:false}}'
             ;;
         'POST /api/v1/callers')
-            jq -e --arg revision "${revision}" --arg fact_id "${expected_fact_id}" '.repositoryId == "payment-service" and .revision == $revision and .methodFactId == $fact_id' <<< "${body}" >/dev/null
+            requested_fact_id="$(jq -er '.methodFactId | select(type == "string" and length > 0)' <<< "${body}")"
+            printf '%s' "${requested_fact_id}" > "${caller_method_fact_id_file}"
+            jq -e --arg revision "${revision}" '.repositoryId == "payment-service" and .revision == $revision' <<< "${body}" >/dev/null
             record callers
-            jq -cn --arg revision "${revision}" '{repositoryId:"payment-service",revision:$revision,items:[],page:{offset:0,limit:20,returned:0,total:0,hasMore:false}}'
+            response_repository_id='payment-service'
+            response_revision="${revision}"
+            if [[ "${collection_target}" == callers ]]; then
+                response_repository_id="${collection_repository_id}"
+                response_revision="${collection_revision}"
+            fi
+            jq -cn --arg repository_id "${response_repository_id}" --arg revision "${response_revision}" '{repositoryId:$repository_id,revision:$revision,items:[],page:{offset:0,limit:20,returned:0,total:0,hasMore:false}}'
             ;;
         *)
             printf 'unexpected query operation: %s %s\n' "${method}" "${path}" >&2
@@ -210,6 +240,33 @@ query() {
 }
 exercise_representative_query_flow "${revision}"
 [[ "$(<"${CALLS}")" == $'repositories\nrepository\nsearch-code\nfact-source\napi-routes\ncallers\nquery=representative-flow repository=payment-service revision=1111111111111111111111111111111111111111 result=accepted' ]]
+
+search_result_shape='leading-class'
+exercise_representative_query_flow "${revision}"
+[[ "$(<"${caller_method_fact_id_file}")" == "${expected_fact_id}" ]] || {
+    printf 'Semantic UAT passed a non-METHOD fact id to callers\n' >&2
+    exit 1
+}
+search_result_shape='method-only'
+
+for collection_target in search-code api-routes callers; do
+    for invalid_collection_field in repository revision; do
+        collection_repository_id='payment-service'
+        collection_revision="${revision}"
+        if [[ "${invalid_collection_field}" == repository ]]; then
+            collection_repository_id='wrong-repository'
+        else
+            collection_revision='3333333333333333333333333333333333333333'
+        fi
+        if (exercise_representative_query_flow "${revision}"); then
+            printf 'Semantic UAT accepted wrong top-level %s for %s\n' "${invalid_collection_field}" "${collection_target}" >&2
+            exit 1
+        fi
+    done
+done
+collection_target=''
+collection_repository_id='payment-service'
+collection_revision="${revision}"
 
 printf 'SEMANTIC_QUERY_API_TOKEN=read-token\nSEMANTIC_HOST_PORT=18080\n' > "${TEMPORARY_DIRECTORY}/query.env"
 ENV_FILE="${TEMPORARY_DIRECTORY}/query.env"
