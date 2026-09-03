@@ -176,6 +176,7 @@ collection_target=''
 collection_repository_id='payment-service'
 collection_revision="${revision}"
 caller_method_fact_id_file="${TEMPORARY_DIRECTORY}/caller-method-fact-id"
+fact_source_fact_id_file="${TEMPORARY_DIRECTORY}/fact-source-fact-id"
 query() {
     local method="$1" path="$2" body="${3:-}" response_repository_id response_revision requested_fact_id
     case "${method} ${path}" in
@@ -204,6 +205,7 @@ query() {
             ;;
         'POST /api/v1/fact-source')
             requested_fact_id="$(jq -er '.factId | select(type == "string" and length > 0)' <<< "${body}")"
+            printf '%s' "${requested_fact_id}" > "${fact_source_fact_id_file}"
             jq -e --arg revision "${revision}" '.repositoryId == "payment-service" and .revision == $revision' <<< "${body}" >/dev/null
             record fact-source
             jq -cn --arg revision "${revision}" --arg fact_id "${requested_fact_id}" --arg code "${expected_source_code}" '{repositoryId:"payment-service",revision:$revision,factId:$fact_id,source:{path:"src/main/java/com/example/payment/PaymentFeeCalculator.java",startLine:1,endLine:1,code:$code},factRange:{startLine:1,endLine:1}}'
@@ -243,6 +245,10 @@ exercise_representative_query_flow "${revision}"
 
 search_result_shape='leading-class'
 exercise_representative_query_flow "${revision}"
+[[ "$(<"${fact_source_fact_id_file}")" == "${expected_fact_id}" ]] || {
+    printf 'Semantic UAT passed a non-METHOD fact id to fact-source\n' >&2
+    exit 1
+}
 [[ "$(<"${caller_method_fact_id_file}")" == "${expected_fact_id}" ]] || {
     printf 'Semantic UAT passed a non-METHOD fact id to callers\n' >&2
     exit 1
