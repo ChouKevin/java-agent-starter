@@ -5,10 +5,11 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TEMPORARY_DIRECTORY="$(mktemp -d)"
 FAKE_STARTER="${TEMPORARY_DIRECTORY}/starter"
 CALL_LOG="${TEMPORARY_DIRECTORY}/calls.log"
+STARTER_ROOT_CALL_LOG="${TEMPORARY_DIRECTORY}/starter-root-calls.log"
 OUTPUT_LOG="${TEMPORARY_DIRECTORY}/output.log"
 SECRET_TOKEN='semantic-uat-token'
 SYSTEM_CP="$(command -v cp)"
-export CALL_LOG SECRET_TOKEN SYSTEM_CP
+export CALL_LOG SECRET_TOKEN SYSTEM_CP STARTER_ROOT_CALL_LOG
 
 cleanup() { rm -rf -- "${TEMPORARY_DIRECTORY}"; }
 trap cleanup EXIT
@@ -82,6 +83,10 @@ chmod +x "${FAKE_STARTER}/semantic-index-uat.sh"
 cat > "${FAKE_STARTER}/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+fake_root="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
+if [[ "${STARTER_ROOT:-}" != "${fake_root}" ]]; then
+    printf 'expected=%s actual=%s\n' "${fake_root}" "${STARTER_ROOT:-<unset>}" >> "${STARTER_ROOT_CALL_LOG}"
+fi
 arguments="$*"
 case "${arguments}" in
     *' stop semantic-query-gateway semantic-query')
@@ -360,8 +365,13 @@ assert_new_failure_evidence "${FAILURE_EVIDENCE_BEFORE}" semantic-deployed-it
 }
 
 : > "${CALL_LOG}"
+: > "${STARTER_ROOT_CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
 PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1
+[[ ! -s "${STARTER_ROOT_CALL_LOG}" ]] || {
+    printf 'cross-service UAT invoked Docker Compose without the expected STARTER_ROOT\n' >&2
+    exit 1
+}
 mapfile -t CALLS < "${CALL_LOG}"
 semantic_maven_call_count="$(grep -Ec '^mvn:semantic:(dependency-install|deployed-it)$' "${CALL_LOG}")"
 [[ "${semantic_maven_call_count}" -eq 2 ]] || {
