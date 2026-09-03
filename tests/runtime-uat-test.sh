@@ -52,6 +52,10 @@ assert_outer_lock() {
 cross_service_uat_impl() {
     assert_outer_lock
     COMPOSE=(docker compose --project-name java-agent-uat --env-file "__STARTER__/.env" -f "__STARTER__/compose.yaml")
+    printf 'cross-service:offline-stage\n' >> "__CALL_LOG__"
+    if [[ "$(printenv FAKE_OFFLINE_WORKFLOW_FAIL || true)" == true ]]; then
+        false
+    fi
     printf 'cross-service:complete\n' >> "__CALL_LOG__"
     cat > "__STARTER__/deployment-record.txt" <<RECORD
 deployment timestamp: 2026-09-03T00:00:00+00:00
@@ -89,10 +93,20 @@ EOF
 sed -i -e "s|__STARTER__|$FAKE_STARTER|g" -e "s|__CALL_LOG__|$CALL_LOG|g" "$FAKE_STARTER/bin/docker"
 chmod +x "$FAKE_STARTER/bin/docker"
 
+cat > "$FAKE_STARTER/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sleep:%s\n' "$*" >> "__CALL_LOG__"
+EOF
+sed -i "s|__CALL_LOG__|$CALL_LOG|g" "$FAKE_STARTER/bin/sleep"
+chmod +x "$FAKE_STARTER/bin/sleep"
+
 cat > "$FAKE_STARTER/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 FAKE_RUNTIME_FAIL_STAGE="$(printenv FAKE_RUNTIME_FAIL_STAGE || true)"
+FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY="$(printenv FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY || true)"
+FAKE_RUNTIME_JOB_1_RETRY="$(printenv FAKE_RUNTIME_JOB_1_RETRY || true)"
 method=GET
 body=
 url=
@@ -140,8 +154,24 @@ case "$url" in
         fi ;;
     http://127.0.0.1:18090/internal/message-jobs/job-1)
         [[ "$FAKE_RUNTIME_FAIL_STAGE" != job ]] || exit 42
-        printf 'GET job-1\n' >> "__REQUEST_LOG__"
-        printf '%s\n' '{"messageJobId":"job-1","sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","status":"DONE"}' ;;
+        if [[ "$FAKE_RUNTIME_JOB_1_RETRY" == true ]]; then
+            poll_file="__TEMPORARY_DIRECTORY__/job-1-retry-polls"
+            polls=0
+            [[ -f "$poll_file" ]] && polls="$(< "$poll_file")"
+            polls=$((polls + 1))
+            printf '%s' "$polls" > "$poll_file"
+            case "$polls" in
+                1) status=RETRY ;;
+                2) status=WORKING ;;
+                3) status=DONE ;;
+                *) exit 46 ;;
+            esac
+            printf 'GET job-1:%s\n' "$status" >> "__REQUEST_LOG__"
+            jq -cn --arg status "$status" '{messageJobId:"job-1",sessionId:"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86",status:$status}'
+        else
+            printf 'GET job-1\n' >> "__REQUEST_LOG__"
+            printf '%s\n' '{"messageJobId":"job-1","sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","status":"DONE"}'
+        fi ;;
     http://127.0.0.1:18090/internal/message-jobs/job-2)
         printf 'GET job-2\n' >> "__REQUEST_LOG__"
         printf '%s\n' '{"messageJobId":"job-2","sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","status":"DONE"}' ;;
@@ -149,7 +179,7 @@ case "$url" in
         [[ "$FAKE_RUNTIME_FAIL_STAGE" != history ]] || exit 43
         count="$(cat "__STATE_FILE__" 2>/dev/null || printf 0)"
         printf 'GET history-%s\n' "$count" >> "__REQUEST_LOG__"
-        if (( count <= 1 )); then
+        if (( count <= 1 )) || [[ "$FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY" == true ]]; then
             cat <<'JSON'
 [{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"}]
 JSON
@@ -188,6 +218,19 @@ if SESSION_AGENT_LIVE=true PATH="$FAKE_STARTER/bin:$PATH" "$FAKE_STARTER/runtime
 fi
 [[ ! -e "$CALL_LOG" ]] || { printf 'runtime UAT mutated before its opt-in checks\n' >&2; exit 1; }
 
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_OFFLINE_WORKFLOW_FAIL=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted a failed offline workflow\n' >&2
+    exit 1
+fi
+grep -Fq 'runtime-uat: offline cross-service deployment failed' "$OUTPUT_LOG"
+grep -Fxq 'cross-service:offline-stage' "$CALL_LOG"
+! grep -Fq 'cross-service:complete' "$CALL_LOG"
+[[ ! -e "$REQUEST_LOG" ]]
+! grep -Fq 'docker:' "$CALL_LOG"
+
+rm -rf "$FAKE_STARTER/.runtime/evidence/session-mcp-live"
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
 SESSION_AGENT_LIVE=true run_runtime env > "$OUTPUT_LOG" 2>&1
 
 grep -Fxq 'cross-service:complete' "$CALL_LOG"
@@ -215,6 +258,25 @@ grep -Fq 'result=pass' "$EVIDENCE_DIRECTORY/structural-report.txt"
 ! grep -R -Fq "$SECRET_TOKEN" "$EVIDENCE_DIRECTORY"
 ! grep -Fq "$SECRET_KEY" "$OUTPUT_LOG"
 ! grep -Fq "$SECRET_TOKEN" "$OUTPUT_LOG"
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG" "$TEMPORARY_DIRECTORY/job-1-retry-polls"
+if ! SESSION_AGENT_LIVE=true FAKE_RUNTIME_JOB_1_RETRY=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT did not poll RETRY message jobs to completion\n' >&2
+    exit 1
+fi
+grep -Fxq 'GET job-1:RETRY' "$REQUEST_LOG"
+grep -Fxq 'GET job-1:WORKING' "$REQUEST_LOG"
+grep -Fxq 'GET job-1:DONE' "$REQUEST_LOG"
+[[ "$(< "$TEMPORARY_DIRECTORY/job-1-retry-polls")" == 3 ]]
+[[ "$(grep -Fc 'sleep:1' "$CALL_LOG")" == 2 ]]
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted unchanged history after the follow-up job completed\n' >&2
+    exit 1
+fi
+[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 2 ]]
+grep -Fxq 'POST follow-up' "$REQUEST_LOG"
 
 rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
 if SESSION_AGENT_LIVE=true FAKE_RUNTIME_FAIL_STAGE=job run_runtime env > "$OUTPUT_LOG" 2>&1; then

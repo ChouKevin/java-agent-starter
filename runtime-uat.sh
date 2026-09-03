@@ -104,7 +104,7 @@ wait_for_done_job() {
             return 0
         fi
         case "$status" in
-            PENDING|WORKING) sleep 1 ;;
+            PENDING|RETRY|WORKING) sleep 1 ;;
             *) runtime_uat_fail "message job did not complete successfully: $job_id status=$status"; return 1 ;;
         esac
     done
@@ -171,13 +171,27 @@ assert_history_preserved() {
 assert_follow_up_history() {
     local first_history="$1"
     local final_history="$2"
+    local second_job_id="$3"
 
     assert_complete_tool_pairing "$final_history" || return 1
     assert_history_preserved "$first_history" "$final_history" || return 1
-    jq -e '
-        (.[-1].type == "ASSISTANT")
-        and (.[-1].message | type == "string" and length > 0)
+    jq -e --slurpfile first <(printf '%s\n' "$first_history") --arg second_job_id "$second_job_id" '
+        ($first[0] | length) as $prefix_length
+        | .[$prefix_length:] as $suffix
+        | ($suffix | length > 0)
+        and any($suffix[];
+            .type == "ASSISTANT"
+            and .messageJobId == $second_job_id
+            and (.message | type == "string" and length > 0))
     ' <<< "$final_history" >/dev/null
+}
+
+run_offline_cross_service_uat() {
+    set -E
+    trap 'runtime_uat_fail "offline cross-service deployment failed"; exit 1' ERR
+    cross_service_uat_impl
+    trap - ERR
+    set +E
 }
 
 record_session_metadata() {
@@ -213,7 +227,7 @@ runtime_uat_impl() {
 
     prepare_live_evidence
     started_at="$(date --iso-8601=seconds)"
-    cross_service_uat_impl || runtime_uat_fail 'offline cross-service deployment failed'
+    run_offline_cross_service_uat
     [[ -f "$ROOT/deployment-record.txt" ]] || runtime_uat_fail 'deployment record is unavailable'
     cp "$ROOT/deployment-record.txt" "$(live_evidence_file deployment-record.txt)"
     chmod 0600 "$(live_evidence_file deployment-record.txt)"
@@ -255,7 +269,8 @@ runtime_uat_impl() {
     second_job="$(wait_for_done_job "$second_job_id")" || runtime_uat_fail 'follow-up job failed'
     write_live_evidence second-job.json "$second_job"
     final_history="$(session_history "$session_id")" || runtime_uat_fail 'final session history is unavailable'
-    assert_follow_up_history "$first_history" "$final_history" || runtime_uat_fail 'follow-up session history failed structural validation'
+    assert_follow_up_history "$first_history" "$final_history" "$second_job_id" \
+        || runtime_uat_fail 'follow-up session history failed structural validation'
     write_live_evidence final-history.json "$final_history"
     completed_at="$(date --iso-8601=seconds)"
 
