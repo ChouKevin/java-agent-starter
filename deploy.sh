@@ -6,7 +6,6 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 ENV_FILE="${ROOT}/.env"
 SOURCES_DIR="${ROOT}/.runtime/sources"
 STARTUP_WAIT_SECONDS=240
-REQUIRED_RUNTIME_COMMIT='1e273dd41c0592a6a7abd6f9def0160caf9b7561'
 DEPLOYMENT_RECORD_FILE="${ROOT}/deployment-record.txt"
 DEPLOYMENT_RUNTIME_URL=""
 DEPLOYMENT_RUNTIME_REF=""
@@ -91,7 +90,7 @@ remote_branch_sha() {
 }
 
 stage_branch_source() (
-    local label="$1" url="$2" branch="$3" required_commit="${4:-}"
+    local label="$1" url="$2" branch="$3"
     local target staging_parent staging actual staged=false
     target="$(remote_branch_sha "${url}" "${branch}")"
     staging_parent="$(mktemp -d "${SOURCES_DIR}/.staging.XXXXXX")" || fail "${label} staging directory could not be created"
@@ -100,10 +99,6 @@ stage_branch_source() (
     git clone --branch "${branch}" --single-branch "${url}" "${staging}" || fail "${label} source could not be staged"
     actual="$(git -C "${staging}" rev-parse HEAD)"
     [[ "${actual}" == "${target}" ]] || fail "${label} changed while being staged"
-    if [[ -n "${required_commit}" ]]; then
-        git -C "${staging}" merge-base --is-ancestor "${required_commit}" "${target}" \
-            || fail "Session Agent Runtime target ${target} does not contain required compatible commit ${required_commit}"
-    fi
     staged=true
     printf '%s' "${staging}"
 )
@@ -139,7 +134,7 @@ promote_staged_source() {
 prepare_sources() {
     local runtime_url="$1" runtime_ref="$2" semantic_url="$3" semantic_ref="$4" runtime_staging semantic_staging
     mkdir -p "${SOURCES_DIR}"
-    runtime_staging="$(stage_branch_source session-agent-runtime "${runtime_url}" "${runtime_ref}" "${REQUIRED_RUNTIME_COMMIT}")" \
+    runtime_staging="$(stage_branch_source session-agent-runtime "${runtime_url}" "${runtime_ref}")" \
         || fail "Session Agent Runtime source could not be staged"
     STAGING_DIRECTORIES+=("${runtime_staging%/*}")
     semantic_staging="$(stage_branch_source java-code-intelligence "${semantic_url}" "${semantic_ref}")" \
@@ -180,14 +175,16 @@ validate_deployment_sources() {
 }
 
 write_deployment_record() {
-    local temporary_record
+    local temporary_record starter_sha
     validate_deployment_sources
+    starter_sha="$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || printf 'unavailable')"
     temporary_record="$(mktemp "${DEPLOYMENT_RECORD_FILE}.tmp.XXXXXX")" || fail "deployment record temporary file could not be created"
     chmod 0600 "${temporary_record}"
     {
         printf 'deployment timestamp: %s\n' "$(date --iso-8601=seconds)"
         printf 'Session Agent source SHA: %s\n' "${DEPLOYMENT_RUNTIME_TARGET_SHA}"
         printf 'Semantic source SHA: %s\n' "${DEPLOYMENT_SEMANTIC_TARGET_SHA}"
+        printf 'Starter source SHA: %s\n' "${starter_sha}"
     } > "${temporary_record}"
     mv -f "${temporary_record}" "${DEPLOYMENT_RECORD_FILE}"
 }

@@ -3,7 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
-grep -Fq "REQUIRED_RUNTIME_COMMIT='1e273dd41c0592a6a7abd6f9def0160caf9b7561'" "${ROOT}/deploy.sh"
+if rg -n 'REQUIRED_RUNTIME_COMMIT|required compatible commit' "${ROOT}/deploy.sh"; then
+    printf 'obsolete Runtime compatibility gate remains\n' >&2
+    exit 1
+fi
 grep -Fq 'stage_branch_source' "${ROOT}/deploy.sh"
 grep -Fq 'poll_index_job' "${ROOT}/deploy.sh"
 grep -Fq '/index/repositories/${repository}/jobs/${job_id}' "${ROOT}/deploy.sh"

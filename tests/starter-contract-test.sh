@@ -19,7 +19,14 @@ jq -e '
   (.services | has("semantic-mongodb") and has("semantic-mongo-init") and has("semantic-indexer") and has("semantic-query") and has("semantic-query-gateway") and has("session-agent-runtime"))
   and ([.services | keys[] | select(. == "semantic-indexer")] | length) == 1
   and ((.services["semantic-indexer"].deploy.replicas // 1) == 1)
-  and .services["session-agent-runtime"].environment.SEMANTIC_BASE_URL == "http://semantic-query:8080"
+  and (.services["session-agent-runtime"].environment.SPRING_APPLICATION_JSON | fromjson) as $runtime
+  | $runtime["session-agent"].mcp.connections.semantic.enabled == true
+  and $runtime["session-agent"].mcp.connections.semantic.url == "http://semantic-query:8080/mcp"
+  and $runtime["session-agent"].mcp.connections.semantic.headers["X-Api-Token"] == "contract-value"
+  and (.services["session-agent-runtime"].environment | has("SEMANTIC_BASE_URL") | not)
+  and (.services["session-agent-runtime"].environment | has("SEMANTIC_API_TOKEN") | not)
+  and (.services["session-agent-runtime"].depends_on | has("semantic-query") | not)
+  and (.services["session-agent-runtime"].depends_on | has("session-agent-postgres"))
   and (.services["semantic-query"].networks | keys) == ["semantic-read"]
   and ((.services["semantic-query"].ports // []) | length) == 0
   and (.services["semantic-query-gateway"].depends_on["semantic-query"].condition == "service_started")
@@ -35,6 +42,7 @@ jq -e '
   and ([.services["semantic-mongo-init"].environment.SEMANTIC_MONGODB_URI, .services["semantic-indexer"].environment.SEMANTIC_MONGODB_URI, .services["semantic-query"].environment.SEMANTIC_MONGODB_URI] | all(contains("/semantic_uat?authSource=semantic_uat")))
   and (.services["semantic-index-probe"].command[2] | contains("-H \"X-Api-Token: $$SEMANTIC_INDEXER_ADMIN_TOKEN\""))
   and (.services["semantic-query-probe"].command[2] | contains("-H \"X-Api-Token: $$SEMANTIC_QUERY_API_TOKEN\""))
+  and (.services["semantic-query-probe"].command[2] | contains("http://semantic-query:8080/api/v1/repositories"))
   and (.volumes | has("semantic-mongodb-data") and has("semantic-indexer-repository-data") and has("semantic-indexer-jdt-data"))
 ' <<< "${compose_json}" >/dev/null
 
