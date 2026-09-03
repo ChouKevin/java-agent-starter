@@ -208,6 +208,42 @@ fi
 EOF
 chmod +x "${FAKE_STARTER}/bin/mvn"
 
+snapshot_failure_evidence_directories() {
+    local snapshot_file="$1"
+    if [[ -d "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp" ]]; then
+        find "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp" -mindepth 1 -maxdepth 1 \
+            -type d -print | sort > "${snapshot_file}"
+    else
+        : > "${snapshot_file}"
+    fi
+}
+
+assert_new_failure_evidence() {
+    local before_file="$1" expected_stage="$2"
+    local after_file="${TEMPORARY_DIRECTORY}/failure-evidence-after-${expected_stage}"
+    snapshot_failure_evidence_directories "${after_file}"
+    mapfile -t NEW_FAILURE_DIRECTORIES < <(comm -13 "${before_file}" "${after_file}")
+    [[ "${#NEW_FAILURE_DIRECTORIES[@]}" -eq 1 ]] || {
+        printf 'cross-service UAT did not create exactly one evidence directory for %s\n' \
+            "${expected_stage}" >&2
+        exit 1
+    }
+    FAILURE_DIRECTORY="${NEW_FAILURE_DIRECTORIES[0]}"
+    [[ -f "${FAILURE_DIRECTORY}/failure.txt" \
+        && "$(<"${FAILURE_DIRECTORY}/failure.txt")" == "stage=${expected_stage}" \
+        && -f "${FAILURE_DIRECTORY}/component-logs.txt" \
+        && -f "${FAILURE_DIRECTORY}/runtime-mcp-connections.json" \
+        && -f "${FAILURE_DIRECTORY}/deployment-record.txt" ]] || {
+        printf 'cross-service UAT did not retain exact diagnostics for %s\n' \
+            "${expected_stage}" >&2
+        exit 1
+    }
+    ! grep -R -Fq "${SECRET_TOKEN}" "${FAILURE_DIRECTORY}" "${OUTPUT_LOG}" || {
+        printf 'cross-service UAT leaked the token for %s\n' "${expected_stage}" >&2
+        exit 1
+    }
+}
+
 PATH="${FAKE_STARTER}/bin:${PATH}" bash -c 'source "$1"; declare -F cross_service_uat_main >/dev/null' \
     -- "${FAKE_STARTER}/cross-service-uat.sh"
 [[ ! -e "${CALL_LOG}" ]] || { printf 'sourcing cross-service UAT performed deployment work\n' >&2; exit 1; }
@@ -236,6 +272,8 @@ wait "${LOCK_HOLDER_PID}"
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+FAILURE_EVIDENCE_BEFORE="${TEMPORARY_DIRECTORY}/fixture-evidence-before"
+snapshot_failure_evidence_directories "${FAILURE_EVIDENCE_BEFORE}"
 if CROSS_SERVICE_UAT_FAIL_FIXTURE_EVIDENCE=true PATH="${FAKE_STARTER}/bin:${PATH}" \
     "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
     printf 'cross-service UAT returned success after fixture evidence copy failed\n' >&2
@@ -247,13 +285,12 @@ mapfile -t FIXTURE_FAILURE_CALLS < "${CALL_LOG}"
     printf 'cross-service UAT continued after fixture evidence copy failed\n' >&2
     exit 1
 }
-grep -R -Fxq 'stage=fixture-evidence' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
-    printf 'cross-service UAT did not identify fixture-evidence as the failed stage\n' >&2
-    exit 1
-}
+assert_new_failure_evidence "${FAILURE_EVIDENCE_BEFORE}" fixture-evidence
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+FAILURE_EVIDENCE_BEFORE="${TEMPORARY_DIRECTORY}/runtime-container-before-evidence-before"
+snapshot_failure_evidence_directories "${FAILURE_EVIDENCE_BEFORE}"
 if CROSS_SERVICE_UAT_FAIL_RUNTIME_CONTAINER_READ=true PATH="${FAKE_STARTER}/bin:${PATH}" \
     "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
     printf 'cross-service UAT returned success after the pre-recovery Runtime ID read failed\n' >&2
@@ -264,13 +301,12 @@ mapfile -t RUNTIME_ID_READ_FAILURE_CALLS < "${CALL_LOG}"
     printf 'cross-service UAT continued after the pre-recovery Runtime ID read failed\n' >&2
     exit 1
 }
-grep -R -Fxq 'stage=runtime-container-before' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
-    printf 'cross-service UAT did not identify the pre-recovery Runtime ID stage\n' >&2
-    exit 1
-}
+assert_new_failure_evidence "${FAILURE_EVIDENCE_BEFORE}" runtime-container-before
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+FAILURE_EVIDENCE_BEFORE="${TEMPORARY_DIRECTORY}/runtime-container-stable-evidence-before"
+snapshot_failure_evidence_directories "${FAILURE_EVIDENCE_BEFORE}"
 if CROSS_SERVICE_UAT_RUNTIME_CONTAINER_CHANGES=true PATH="${FAKE_STARTER}/bin:${PATH}" \
     "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
     printf 'cross-service UAT returned success after Runtime recreation during Semantic recovery\n' >&2
@@ -281,13 +317,12 @@ mapfile -t RESTART_FAILURE_CALLS < "${CALL_LOG}"
     printf 'cross-service UAT continued after Runtime container changed\n' >&2
     exit 1
 }
-grep -R -Fxq 'stage=runtime-container-stable' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
-    printf 'cross-service UAT did not identify the Runtime stability stage\n' >&2
-    exit 1
-}
+assert_new_failure_evidence "${FAILURE_EVIDENCE_BEFORE}" runtime-container-stable
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+FAILURE_EVIDENCE_BEFORE="${TEMPORARY_DIRECTORY}/semantic-dependency-install-evidence-before"
+snapshot_failure_evidence_directories "${FAILURE_EVIDENCE_BEFORE}"
 if CROSS_SERVICE_UAT_FAIL_SEMANTIC_DEPENDENCY_INSTALL=true PATH="${FAKE_STARTER}/bin:${PATH}" \
     "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
     printf 'cross-service UAT returned success after Semantic dependency installation failed\n' >&2
@@ -300,13 +335,12 @@ mapfile -t DEPENDENCY_INSTALL_FAILURE_CALLS < "${CALL_LOG}"
     printf 'cross-service UAT continued after Semantic dependency installation failed\n' >&2
     exit 1
 }
-grep -R -Fxq 'stage=semantic-deployed-it' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
-    printf 'cross-service UAT did not identify semantic-deployed-it after dependency installation failed\n' >&2
-    exit 1
-}
+assert_new_failure_evidence "${FAILURE_EVIDENCE_BEFORE}" semantic-deployed-it
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+FAILURE_EVIDENCE_BEFORE="${TEMPORARY_DIRECTORY}/semantic-deployed-it-evidence-before"
+snapshot_failure_evidence_directories "${FAILURE_EVIDENCE_BEFORE}"
 if CROSS_SERVICE_UAT_FAIL_SEMANTIC_DEPLOYED_IT=true PATH="${FAKE_STARTER}/bin:${PATH}" \
     "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
     printf 'cross-service UAT returned success after Semantic deployed-it failed\n' >&2
@@ -319,15 +353,11 @@ mapfile -t FAILURE_CALLS < "${CALL_LOG}"
     printf 'cross-service UAT continued after Semantic deployed-it failed\n' >&2
     exit 1
 }
-FAILURE_EVIDENCE="$(find "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp" -type f -name failure.txt -print -quit)"
-[[ -n "${FAILURE_EVIDENCE}" && -f "${FAILURE_EVIDENCE}" ]] || { printf 'cross-service UAT did not retain failure evidence\n' >&2; exit 1; }
-FAILURE_DIRECTORY="$(dirname -- "${FAILURE_EVIDENCE}")"
-[[ -f "${FAILURE_DIRECTORY}/component-logs.txt" && -f "${FAILURE_DIRECTORY}/runtime-mcp-connections.json" \
-    && -f "${FAILURE_DIRECTORY}/deployment-record.txt" && -d "${FAILURE_DIRECTORY}/semantic-fixture-evidence" ]] || {
+assert_new_failure_evidence "${FAILURE_EVIDENCE_BEFORE}" semantic-deployed-it
+[[ -d "${FAILURE_DIRECTORY}/semantic-fixture-evidence" ]] || {
     printf 'cross-service UAT did not retain safe diagnostics for a failed stage\n' >&2
     exit 1
 }
-! grep -R -Fq "${SECRET_TOKEN}" "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp" "${OUTPUT_LOG}"
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
