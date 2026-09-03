@@ -152,9 +152,9 @@ assert_first_turn_history() {
         and any(.[] | select(.type == "TOOL");
             (.output | type == "object")
             and .output.isError == false
-            and ([.output | .. | objects | .code? | strings | select(length > 0)] | length > 0))
+            and ([.output | .. | objects | .code? | strings | select(test("[^[:space:]]"))] | length > 0))
         and (.[-1].type == "ASSISTANT")
-        and (.[-1].message | type == "string" and length > 0)
+        and (.[-1].message | type == "string" and test("[^[:space:]]"))
     ' <<< "$history" >/dev/null
 }
 
@@ -182,7 +182,7 @@ assert_follow_up_history() {
         and any($suffix[];
             .type == "ASSISTANT"
             and .messageJobId == $second_job_id
-            and (.message | type == "string" and length > 0))
+            and (.message | type == "string" and test("[^[:space:]]")))
     ' <<< "$final_history" >/dev/null
 }
 

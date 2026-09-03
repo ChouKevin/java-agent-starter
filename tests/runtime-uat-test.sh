@@ -107,6 +107,9 @@ set -euo pipefail
 FAKE_RUNTIME_FAIL_STAGE="$(printenv FAKE_RUNTIME_FAIL_STAGE || true)"
 FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY="$(printenv FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY || true)"
 FAKE_RUNTIME_JOB_1_RETRY="$(printenv FAKE_RUNTIME_JOB_1_RETRY || true)"
+FAKE_RUNTIME_BLANK_SOURCE_CODE="$(printenv FAKE_RUNTIME_BLANK_SOURCE_CODE || true)"
+FAKE_RUNTIME_BLANK_FIRST_ASSISTANT="$(printenv FAKE_RUNTIME_BLANK_FIRST_ASSISTANT || true)"
+FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT="$(printenv FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT || true)"
 method=GET
 body=
 url=
@@ -180,11 +183,37 @@ case "$url" in
         count="$(cat "__STATE_FILE__" 2>/dev/null || printf 0)"
         printf 'GET history-%s\n' "$count" >> "__REQUEST_LOG__"
         if (( count <= 1 )) || [[ "$FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY" == true ]]; then
-            cat <<'JSON'
+            cat <<'JSON' | jq --arg blank_source "$FAKE_RUNTIME_BLANK_SOURCE_CODE" \
+                --arg blank_first_assistant "$FAKE_RUNTIME_BLANK_FIRST_ASSISTANT" \
+                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" '
+                map(
+                    if $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
+                        .output.result.items[0].source.code = " \t "
+                    elif $blank_first_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-1" then
+                        .message = " \t "
+                    elif $blank_follow_up_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-2" then
+                        .message = " \t "
+                    else .
+                    end
+                )
+'
 [{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"}]
 JSON
         else
-            cat <<'JSON'
+            cat <<'JSON' | jq --arg blank_source "$FAKE_RUNTIME_BLANK_SOURCE_CODE" \
+                --arg blank_first_assistant "$FAKE_RUNTIME_BLANK_FIRST_ASSISTANT" \
+                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" '
+                map(
+                    if $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
+                        .output.result.items[0].source.code = " \t "
+                    elif $blank_first_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-1" then
+                        .message = " \t "
+                    elif $blank_follow_up_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-2" then
+                        .message = " \t "
+                    else .
+                    end
+                )
+'
 [{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"},{"sequence":6,"type":"USER","messageJobId":"job-2","participantId":"live-uat","message":"這些付款方式的手續費能否只看程式碼就確定？若不能，請說明缺少哪類執行期資料。"},{"sequence":7,"type":"ASSISTANT","messageJobId":"job-2","message":"無法僅由程式碼確定；還需要目前的費率設定。"}]
 JSON
         fi ;;
@@ -258,6 +287,23 @@ grep -Fq 'result=pass' "$EVIDENCE_DIRECTORY/structural-report.txt"
 ! grep -R -Fq "$SECRET_TOKEN" "$EVIDENCE_DIRECTORY"
 ! grep -Fq "$SECRET_KEY" "$OUTPUT_LOG"
 ! grep -Fq "$SECRET_TOKEN" "$OUTPUT_LOG"
+
+for blank_case in source first-assistant follow-up-assistant; do
+    rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+    case "$blank_case" in
+        source) blank_environment=FAKE_RUNTIME_BLANK_SOURCE_CODE ;;
+        first-assistant) blank_environment=FAKE_RUNTIME_BLANK_FIRST_ASSISTANT ;;
+        follow-up-assistant) blank_environment=FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT ;;
+    esac
+    if (
+        export SESSION_AGENT_LIVE=true
+        export "$blank_environment=true"
+        run_runtime env > "$OUTPUT_LOG" 2>&1
+    ); then
+        printf 'runtime UAT accepted whitespace-only %s content\n' "$blank_case" >&2
+        exit 1
+    fi
+done
 
 rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG" "$TEMPORARY_DIRECTORY/job-1-retry-polls"
 if ! SESSION_AGENT_LIVE=true FAKE_RUNTIME_JOB_1_RETRY=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
