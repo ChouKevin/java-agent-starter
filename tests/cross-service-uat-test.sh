@@ -173,16 +173,28 @@ cat > "${FAKE_STARTER}/bin/mvn" <<'EOF'
 set -euo pipefail
 fake_root="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 if [[ "$3" == "${fake_root}/.runtime/sources/java-code-intelligence/pom.xml" ]]; then
-    [[ "$#" -eq 11 && "$1" == -q && "$2" == -f && "$4" == -pl && "$5" == semantic-query && "$6" == -am ]]
-    [[ "$7" == -Pdeployed-it && "$8" == -Dtest=SemanticDeploymentIT && "$9" == -DfailIfNoTests=true \
-        && "${10}" == -Dsurefire.failIfNoSpecifiedTests=false && "${11}" == test ]]
-    [[ "${SEMANTIC_BASE_URL}" == http://127.0.0.1:18080 && "${SEMANTIC_API_TOKEN}" == "${SECRET_TOKEN}" ]]
-    [[ "${SEMANTIC_UAT_REPOSITORY}" == payment-service ]]
-    if [[ "${CROSS_SERVICE_UAT_FAIL_SEMANTIC:-false}" == true ]]; then
-        printf 'mvn:semantic:failed\n' >> "${CALL_LOG}"
-        exit 47
+    if [[ "$#" -eq 8 && "$1" == -q && "$2" == -f && "$4" == -pl && "$5" == semantic-query \
+        && "$6" == -am && "$7" == -DskipTests && "$8" == install ]]; then
+        [[ -z "${SEMANTIC_BASE_URL:-}" && -z "${SEMANTIC_API_TOKEN:-}" && -z "${SEMANTIC_UAT_REPOSITORY:-}" ]]
+        if [[ "${CROSS_SERVICE_UAT_FAIL_SEMANTIC_DEPENDENCY_INSTALL:-false}" == true ]]; then
+            printf 'mvn:semantic:dependency-install-failed\n' >> "${CALL_LOG}"
+            exit 46
+        fi
+        printf 'mvn:semantic:dependency-install\n' >> "${CALL_LOG}"
+    elif [[ "$#" -eq 9 && "$1" == -q && "$2" == -f && "$4" == -pl && "$5" == semantic-query \
+        && "$6" == -Pdeployed-it && "$7" == -Dtest=SemanticDeploymentIT && "$8" == -DfailIfNoTests=true \
+        && "$9" == test ]]; then
+        [[ "${SEMANTIC_BASE_URL}" == http://127.0.0.1:18080 && "${SEMANTIC_API_TOKEN}" == "${SECRET_TOKEN}" ]]
+        [[ "${SEMANTIC_UAT_REPOSITORY}" == payment-service ]]
+        if [[ "${CROSS_SERVICE_UAT_FAIL_SEMANTIC_DEPLOYED_IT:-false}" == true ]]; then
+            printf 'mvn:semantic:deployed-it-failed\n' >> "${CALL_LOG}"
+            exit 47
+        fi
+        printf 'mvn:semantic:deployed-it\n' >> "${CALL_LOG}"
+    else
+        printf 'unexpected Semantic Maven invocation: %s\n' "$*" >&2
+        exit 1
     fi
-    printf 'mvn:semantic:deployed-it\n' >> "${CALL_LOG}"
 elif [[ "$3" == "${fake_root}/.runtime/sources/session-agent-runtime/pom.xml" ]]; then
     [[ "$#" -eq 6 && "$1" == -q && "$2" == -f ]]
     [[ "$4" == '-Dtest=McpToolCatalogTest,ConversationHistoryProjectorTest,MessageJobServiceTest' ]]
@@ -276,12 +288,34 @@ grep -R -Fxq 'stage=runtime-container-stable' "${FAKE_STARTER}/.runtime/evidence
 
 : > "${CALL_LOG}"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
-if CROSS_SERVICE_UAT_FAIL_SEMANTIC=true PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
+if CROSS_SERVICE_UAT_FAIL_SEMANTIC_DEPENDENCY_INSTALL=true PATH="${FAKE_STARTER}/bin:${PATH}" \
+    "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
+    printf 'cross-service UAT returned success after Semantic dependency installation failed\n' >&2
+    exit 1
+fi
+mapfile -t DEPENDENCY_INSTALL_FAILURE_CALLS < "${CALL_LOG}"
+[[ "${DEPENDENCY_INSTALL_FAILURE_CALLS[*]}" == *'mvn:semantic:dependency-install-failed'* \
+    && "${DEPENDENCY_INSTALL_FAILURE_CALLS[*]}" != *'mvn:semantic:deployed-it'* \
+    && "${DEPENDENCY_INSTALL_FAILURE_CALLS[*]}" != *'mvn:runtime:fake-backed'* ]] || {
+    printf 'cross-service UAT continued after Semantic dependency installation failed\n' >&2
+    exit 1
+}
+grep -R -Fxq 'stage=semantic-deployed-it' "${FAKE_STARTER}/.runtime/evidence/cross-service-mcp"/*/failure.txt || {
+    printf 'cross-service UAT did not identify semantic-deployed-it after dependency installation failed\n' >&2
+    exit 1
+}
+
+: > "${CALL_LOG}"
+rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
+if CROSS_SERVICE_UAT_FAIL_SEMANTIC_DEPLOYED_IT=true PATH="${FAKE_STARTER}/bin:${PATH}" \
+    "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
     printf 'cross-service UAT returned success after Semantic deployed-it failed\n' >&2
     exit 1
 fi
 mapfile -t FAILURE_CALLS < "${CALL_LOG}"
-[[ "${FAILURE_CALLS[*]}" == *'mvn:semantic:failed'* && "${FAILURE_CALLS[*]}" != *'mvn:runtime:fake-backed'* ]] || {
+[[ "${FAILURE_CALLS[*]}" == *'mvn:semantic:dependency-install'* \
+    && "${FAILURE_CALLS[*]}" == *'mvn:semantic:deployed-it-failed'* \
+    && "${FAILURE_CALLS[*]}" != *'mvn:runtime:fake-backed'* ]] || {
     printf 'cross-service UAT continued after Semantic deployed-it failed\n' >&2
     exit 1
 }
@@ -299,6 +333,11 @@ FAILURE_DIRECTORY="$(dirname -- "${FAILURE_EVIDENCE}")"
 rm -f "${TEMPORARY_DIRECTORY}/mcp-polls" "${TEMPORARY_DIRECTORY}/runtime-container-id-count"
 PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/cross-service-uat.sh" > "${OUTPUT_LOG}" 2>&1
 mapfile -t CALLS < "${CALL_LOG}"
+semantic_maven_call_count="$(grep -Ec '^mvn:semantic:(dependency-install|deployed-it)$' "${CALL_LOG}")"
+[[ "${semantic_maven_call_count}" -eq 2 ]] || {
+    printf 'cross-service UAT did not make exactly two Semantic Maven calls\n' >&2
+    exit 1
+}
 EXPECTED_CALLS=(
     deploy:reset
     fixtures:published
@@ -308,6 +347,7 @@ EXPECTED_CALLS=(
     semantic:started-no-runtime
     runtime:mcp-unavailable
     runtime:mcp-available
+    mvn:semantic:dependency-install
     mvn:semantic:deployed-it
     mvn:runtime:fake-backed
 )

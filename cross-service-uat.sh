@@ -151,12 +151,13 @@ run_semantic_deployed_it() {
     [[ -n "${semantic_token}" ]] || cross_service_uat_fail 'SEMANTIC_QUERY_API_TOKEN is blank'
     [[ -f "${SOURCES_DIR}/java-code-intelligence/pom.xml" ]] \
         || cross_service_uat_fail 'Semantic source is unavailable after deployment'
+    mvn -q -f "${SOURCES_DIR}/java-code-intelligence/pom.xml" -pl semantic-query -am -DskipTests install
     SEMANTIC_BASE_URL="http://127.0.0.1:${semantic_port}" \
         SEMANTIC_API_TOKEN="${semantic_token}" \
         SEMANTIC_UAT_REPOSITORY=payment-service \
-        mvn -q -f "${SOURCES_DIR}/java-code-intelligence/pom.xml" -pl semantic-query -am \
+        mvn -q -f "${SOURCES_DIR}/java-code-intelligence/pom.xml" -pl semantic-query \
             -Pdeployed-it -Dtest=SemanticDeploymentIT -DfailIfNoTests=true \
-            -Dsurefire.failIfNoSpecifiedTests=false test
+            test
 }
 
 run_runtime_fake_backed_tests() {
