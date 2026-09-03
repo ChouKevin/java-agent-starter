@@ -1,5 +1,6 @@
 .env
 .runtime/
+.worktrees/
 # Deterministic local UAT remotes are generated beneath .runtime/uat-git.
 .runtime/uat-git/
 backups/
