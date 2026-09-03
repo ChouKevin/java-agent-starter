@@ -10,7 +10,7 @@ grep -Fq 'semantic_ref="$(env_or_default SEMANTIC_GIT_REF main)"' "${ROOT}/deplo
 TEMPORARY_DIRECTORY="$(mktemp -d)"
 trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 
-bash -n "${ROOT}/deploy.sh" "${ROOT}/fixture.sh" "${ROOT}/repository.sh" "${ROOT}/runtime-uat.sh" "${ROOT}/semantic-index-uat.sh"
+bash -n "${ROOT}/deploy.sh" "${ROOT}/fixture.sh" "${ROOT}/repository.sh" "${ROOT}/runtime-uat.sh" "${ROOT}/semantic-index-uat.sh" "${ROOT}/cross-service-uat.sh"
 sed 's/=$/=contract-value/' "${ROOT}/.env.example" > "${TEMPORARY_DIRECTORY}/.env"
 compose_json="$(STARTER_ROOT="${ROOT}" docker compose --project-name starter-contract --env-file "${TEMPORARY_DIRECTORY}/.env" \
     --profile setup --profile schema-maintenance --profile semantic-index-check --profile semantic-query-check \
