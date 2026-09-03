@@ -128,15 +128,39 @@ assert_fixture_revision() {
     evidence "fixtureRevision repository=${repository} tag=${tag} revision=${actual}"
 }
 
-query_assert_success() {
-    local label="$1" method="$2" path="$3" body="${4:-}" response
-    response="$(query "${method}" "${path}" "${body}")" || uat_fail "Query ${label} transport failed"
-    jq -e '(if type == "object" then .code else null end) != "REVISION_OUTDATED"' <<< "${response}" >/dev/null \
-        || uat_fail "Query ${label} unexpectedly returned REVISION_OUTDATED"
-    evidence "query=${label} result=accepted"
+assert_flat_collection() {
+    local label="$1" response="$2"
+    jq -e '
+        type == "object"
+        and (.items | type == "array")
+        and (.page | type == "object"
+            and (.offset | type == "number" and . >= 0)
+            and (.limit | type == "number" and . >= 1)
+            and (.returned | type == "number" and . >= 0)
+            and (.total | type == "number" and . >= 0)
+            and (.hasMore | type == "boolean"))
+        and .page.returned == (.items | length)
+    ' <<< "${response}" >/dev/null || uat_fail "Query ${label} did not return a flat collection page"
 }
 
-first_fact_id() { jq -er '.result.facts[0].fact.id.value'; }
+assert_repository_catalog() {
+    local response="$1"
+    jq -e '
+        type == "object"
+        and (.items | type == "array")
+        and (.page | type == "object"
+            and (.offset | type == "number" and . >= 0)
+            and (.limit | type == "number" and . >= 1)
+            and (.returned | type == "number" and . >= 0)
+            and (.total | type == "number" and . >= 0)
+            and (.hasMore | type == "boolean"))
+        and .page.returned == (.items | length)
+        and all(.items[]; type == "object"
+            and (keys == ["repositoryId", "revision"])
+            and (.repositoryId | type == "string" and length > 0)
+            and (.revision | type == "string" and length > 0))
+    ' <<< "${response}" >/dev/null || uat_fail "Query repository catalog did not return only repositoryId and revision items"
+}
 
 assert_query_is_cold() {
     local query_container canary_log networks mounts environment
@@ -163,32 +187,51 @@ assert_query_is_cold() {
         >> "${EVIDENCE_DIRECTORY}/cold-query-assertions.txt"
 }
 
-exercise_query_tool_families() {
-    local payment_revision="$1" video_revision="$2" payment_search fact_id
-    query_assert_success repositories GET /v1/repositories
-    query_assert_success payment-repository GET /v1/repositories/payment-service
-    query_assert_success payment-entry-points GET "/v1/repositories/payment-service/entry-points?revision=${payment_revision}"
-    payment_search="$(query POST /v1/code-facts/search "$(jq -cn --arg revision "${payment_revision}" \
-        '{repositoryId:"payment-service",revision:$revision,query:"Payment"}')")" || uat_fail "payment code-fact search failed"
-    fact_id="$(first_fact_id <<< "${payment_search}")" \
-        || uat_fail "payment code-fact search returned no fact"
-    query_assert_success payment-code-fact POST /v1/code-facts/get "$(jq -cn --arg revision "${payment_revision}" --arg fact_id "${fact_id}" \
-        '{repositoryId:"payment-service",revision:$revision,factId:$fact_id}')"
-    query_assert_success video-code-fact POST /v1/code-facts/search "$(jq -cn --arg revision "${video_revision}" \
-        '{repositoryId:"video-service",revision:$revision,query:"Video"}')"
-    local method_request route_request symbol_request member_request
-    method_request="$(jq -cn --arg revision "${payment_revision}" '{repositoryId:"payment-service",revision:$revision,packageName:"com.example.payment",className:"PaymentFeeCalculator",sourceFile:"src/main/java/com/example/payment/PaymentFeeCalculator.java",methodName:"calculate",parameterTypes:["com.example.payment.PaymentMethod","java.math.BigDecimal"]}')"
-    route_request="$(jq -cn --arg revision "${payment_revision}" '{repositoryId:"payment-service",revision:$revision,httpMethod:"GET",path:"/payments"}')"
-    symbol_request="$(jq -cn --arg revision "${payment_revision}" '{repositoryId:"payment-service",revision:$revision,packageName:"com.example.payment",className:"PaymentFeeCalculator",sourceFile:"src/main/java/com/example/payment/PaymentFeeCalculator.java",symbol:"calculate"}')"
-    member_request="$(jq -cn --arg revision "${payment_revision}" '{repositoryId:"payment-service",revision:$revision,packageName:"com.example.payment",className:"PaymentFeeCalculator",sourceFile:"src/main/java/com/example/payment/PaymentFeeCalculator.java",kinds:["METHOD"]}')"
-    query_assert_success source-symbols POST /v1/discovery/source-symbols/resolve "${symbol_request}"
-    query_assert_success members POST /v1/discovery/type-members "${member_request}"
-    query_assert_success routes POST /v1/api-routes/lookup "${route_request}"
-    query_assert_success route-suggestions POST /v1/api-routes/suggest "${route_request}"
-    query_assert_success references POST /v1/discovery/internal-references "${method_request}"
-    query_assert_success implementations POST /v1/discovery/method-implementations "${method_request}"
-    query_assert_success outgoing POST /v1/analyses/call-graphs/outgoing "${method_request}"
-    query_assert_success incoming POST /v1/analyses/call-graphs/incoming "${method_request}"
+exercise_representative_query_flow() {
+    local payment_revision="$1" catalog repository payment_search fact_source api_routes callers fact_id source_code
+    catalog="$(query GET /api/v1/repositories)" || uat_fail "repository catalog request failed"
+    assert_repository_catalog "${catalog}"
+    jq -e --arg revision "${payment_revision}" '
+        any(.items[]; .repositoryId == "payment-service" and .revision == $revision)
+    ' <<< "${catalog}" >/dev/null || uat_fail "repository catalog did not expose payment-service at its published revision"
+
+    repository="$(query GET /api/v1/repositories/payment-service)" || uat_fail "payment repository request failed"
+    jq -e --arg revision "${payment_revision}" '
+        type == "object"
+        and (keys == ["repositoryId", "revision"])
+        and .repositoryId == "payment-service"
+        and .revision == $revision
+    ' <<< "${repository}" >/dev/null || uat_fail "payment repository did not return its current revision"
+
+    payment_search="$(query POST /api/v1/search-code "$(jq -cn --arg revision "${payment_revision}" \
+        '{repositoryId:"payment-service",revision:$revision,query:"Payment",kinds:["METHOD"]}')")" \
+        || uat_fail "payment code search failed"
+    assert_flat_collection search-code "${payment_search}"
+    fact_id="$(jq -er '.items[0].factId | select(type == "string" and length > 0)' <<< "${payment_search}")" \
+        || uat_fail "payment code search returned no fact id"
+    source_code="$(jq -er '.items[0].source.code | select(type == "string" and length > 0)' <<< "${payment_search}")" \
+        || uat_fail "payment code search returned no exact source"
+
+    fact_source="$(query POST /api/v1/fact-source "$(jq -cn --arg revision "${payment_revision}" --arg fact_id "${fact_id}" \
+        '{repositoryId:"payment-service",revision:$revision,factId:$fact_id}')")" \
+        || uat_fail "payment fact source request failed"
+    jq -e --arg revision "${payment_revision}" --arg fact_id "${fact_id}" --arg source_code "${source_code}" '
+        .repositoryId == "payment-service"
+        and .revision == $revision
+        and .factId == $fact_id
+        and (.source.code | type == "string" and length > 0 and . == $source_code)
+    ' <<< "${fact_source}" >/dev/null || uat_fail "payment fact source did not return the exact nonblank search source"
+
+    api_routes="$(query POST /api/v1/api-routes "$(jq -cn --arg revision "${payment_revision}" \
+        '{repositoryId:"payment-service",revision:$revision,httpMethod:"GET",path:"/payments"}')")" \
+        || uat_fail "payment API route request failed"
+    assert_flat_collection api-routes "${api_routes}"
+
+    callers="$(query POST /api/v1/callers "$(jq -cn --arg revision "${payment_revision}" --arg fact_id "${fact_id}" \
+        '{repositoryId:"payment-service",revision:$revision,methodFactId:$fact_id}')")" \
+        || uat_fail "payment caller request failed"
+    assert_flat_collection callers "${callers}"
+    evidence "query=representative-flow repository=payment-service revision=${payment_revision} result=accepted"
 }
 
 restart_indexer() {
@@ -213,7 +256,7 @@ same_revision_rebuild() {
     jq -ne --argjson before "${before}" --argjson after "${after}" \
         '$before.revision == $after.revision and $before.generationId != $after.generationId' >/dev/null \
         || uat_fail "same-revision rebuild did not change only the generation"
-    query_assert_success rebuild-cold GET "/v1/repositories/payment-service/entry-points?revision=${payment_revision}"
+    exercise_representative_query_flow "${payment_revision}"
 }
 
 retain_pointer_evidence() {
@@ -224,24 +267,26 @@ retain_pointer_evidence() {
 }
 
 assert_stale_revision() {
-    local requested="$1" current="$2" response status_file
+    local requested="$1" current="$2" response status_file body
     status_file="$(mktemp)"
+    body="$(jq -cn --arg revision "${requested}" '{repositoryId:"payment-service",revision:$revision,query:"Payment"}')"
     response="$(curl --silent --show-error --output "${status_file}" --write-out '%{http_code}' \
         --header "X-Api-Token: $(env_value SEMANTIC_QUERY_API_TOKEN)" \
-        "http://127.0.0.1:$(env_value SEMANTIC_HOST_PORT)/v1/repositories/payment-service/entry-points?revision=${requested}")"
+        --header 'Content-Type: application/json' --request POST --data "${body}" \
+        "http://127.0.0.1:$(env_value SEMANTIC_HOST_PORT)/api/v1/search-code")"
     [[ "${response}" == 409 ]] || uat_fail "R1 did not return HTTP 409 after R2 publication"
-    jq -e --arg requested "${requested}" --arg current "${current}" \
-        '.code == "REVISION_OUTDATED" and .requestedRevision == $requested and .currentRevision == $current' "${status_file}" >/dev/null \
-        || uat_fail "R1 stale response did not identify requested R1 and current R2"
+    jq -e --arg current "${current}" \
+        '.code == "REVISION_OUTDATED" and .currentRevision == $current' "${status_file}" >/dev/null \
+        || uat_fail "R1 stale response did not include the shared current revision"
     rm -f -- "${status_file}"
     evidence "stale=requested:${requested} current:${current} code=REVISION_OUTDATED"
 }
 
 semantic_uat_capture_initial_revisions() {
     local payment_revision order_revision video_revision
-    payment_revision="$(query GET /v1/repositories/payment-service | jq -er '.currentRevision // .revision.value')"
-    order_revision="$(query GET /v1/repositories/order-service | jq -er '.currentRevision // .revision.value')"
-    video_revision="$(query GET /v1/repositories/video-service | jq -er '.currentRevision // .revision.value')"
+    payment_revision="$(query GET /api/v1/repositories/payment-service | jq -er '.revision')"
+    order_revision="$(query GET /api/v1/repositories/order-service | jq -er '.revision')"
+    video_revision="$(query GET /api/v1/repositories/video-service | jq -er '.revision')"
     assert_fixture_revision payment-service v1 "${payment_revision}"
     assert_fixture_revision order-service v1 "${order_revision}"
     assert_fixture_revision video-service v1 "${video_revision}"
@@ -264,16 +309,15 @@ semantic_uat_deploy_initial_r1_impl() {
 }
 
 semantic_uat_cold_r1_and_rebuild_impl() {
-    local payment_revision video_revision
+    local payment_revision
     payment_revision="$(sed -n '1p' "${EVIDENCE_DIRECTORY}/initial-revisions.txt")"
-    video_revision="$(sed -n '3p' "${EVIDENCE_DIRECTORY}/initial-revisions.txt")"
     stop_indexer
-    exercise_query_tool_families "${payment_revision}" "${video_revision}"
+    exercise_representative_query_flow "${payment_revision}"
     assert_query_is_cold
     restart_indexer
     same_revision_rebuild
     stop_indexer
-    query_assert_success rebuild-still-cold GET "/v1/repositories/payment-service/entry-points?revision=${payment_revision}"
+    exercise_representative_query_flow "${payment_revision}"
     assert_query_is_cold
     restart_indexer
 }
@@ -308,10 +352,9 @@ semantic_uat_gated_payment_transition_impl() {
     [[ "${r1_revision}" != "${r2_revision}" ]] || uat_fail "R2 did not change the published revision"
     retain_pointer_evidence "${label}" "${r1}" "${r2}"
     assert_stale_revision "${r1_revision}" "${r2_revision}"
-    query_assert_success r2-current GET "/v1/repositories/payment-service/entry-points?revision=${r2_revision}"
     stop_indexer
     assert_stale_revision "${r1_revision}" "${r2_revision}"
-    exercise_query_tool_families "${r2_revision}" "$(sed -n '3p' "${EVIDENCE_DIRECTORY}/initial-revisions.txt")"
+    exercise_representative_query_flow "${r2_revision}"
     assert_query_is_cold
     restart_indexer
     submit_and_wait payment-service ensure >/dev/null
