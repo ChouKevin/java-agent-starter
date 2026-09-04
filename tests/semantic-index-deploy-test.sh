@@ -5,7 +5,19 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
 grep -Fq 'semantic-indexer:' "${ROOT}/compose.yaml"
 grep -Fq 'semantic-query:' "${ROOT}/compose.yaml"
-grep -Fq 'SEMANTIC_BASE_URL: http://semantic-query:8080' "${ROOT}/compose.yaml"
+TEMPORARY_DIRECTORY="$(mktemp -d)"
+trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
+sed 's/=$/=contract-value/' "${ROOT}/.env.example" > "${TEMPORARY_DIRECTORY}/.env"
+compose_json="$(STARTER_ROOT="${ROOT}" docker compose --project-name semantic-index-contract --env-file "${TEMPORARY_DIRECTORY}/.env" \
+    -f "${ROOT}/compose.yaml" config --format json)"
+jq -e '
+  (.services["session-agent-runtime"].environment.SPRING_APPLICATION_JSON | fromjson) as $runtime
+  | $runtime["session-agent"].mcp.connections.semantic.enabled == true
+  and $runtime["session-agent"].mcp.connections.semantic.url == "http://semantic-query:8080/mcp"
+  and $runtime["session-agent"].mcp.connections.semantic.headers["X-Api-Token"] == "contract-value"
+  and (.services["session-agent-runtime"].environment | has("SEMANTIC_BASE_URL") | not)
+  and (.services["session-agent-runtime"].environment | has("SEMANTIC_API_TOKEN") | not)
+' <<< "${compose_json}" >/dev/null
 grep -Fq 'Dockerfile.indexer' "${ROOT}/compose.yaml"
 grep -Fq 'Dockerfile.query' "${ROOT}/compose.yaml"
 grep -Fq 'schema-bootstrap' "${ROOT}/compose.yaml"
@@ -21,8 +33,6 @@ fixture_source_line="$(grep -n 'source "${ROOT}/fixture.sh"' <<< "${deploy_block
     exit 1
 }
 
-TEMPORARY_DIRECTORY="$(mktemp -d)"
-trap 'rm -rf "${TEMPORARY_DIRECTORY}"' EXIT
 CALL_LOG="${TEMPORARY_DIRECTORY}/calls.log"
 
 source "${ROOT}/deploy.sh"

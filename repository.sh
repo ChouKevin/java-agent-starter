@@ -35,8 +35,8 @@ indexer_request() {
     request "${token}" "${port:-8081}" "$@"
 }
 
-repository_list_impl() { query_request GET /v1/repositories; }
-repository_revision_impl() { repo_id "$1" >/dev/null; query_request GET "/v1/repositories/$1"; }
+repository_list_impl() { query_request GET /api/v1/repositories; }
+repository_revision_impl() { repo_id "$1" >/dev/null; query_request GET "/api/v1/repositories/$1"; }
 repository_ensure_impl() { repo_id "$1" >/dev/null; indexer_request POST "/index/repositories/$1/ensure"; }
 repository_sync_impl() {
     local body publication

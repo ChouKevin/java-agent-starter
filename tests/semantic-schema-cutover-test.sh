@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 
+grep -Fq 'query_request GET /api/v1/repositories' "${ROOT}/repository.sh"
+grep -Fq 'query_request GET "/api/v1/repositories/$1"' "${ROOT}/repository.sh"
+grep -Fq 'exercise_representative_query_flow' "${ROOT}/semantic-index-uat.sh"
+
 grep -Fq 'schema-rebuild)' "${ROOT}/deploy.sh"
 grep -Fq 'record_current_pointers' "${ROOT}/deploy.sh"
 grep -Fq 'rollback_rebuilt_repositories' "${ROOT}/deploy.sh"

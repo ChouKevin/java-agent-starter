@@ -1,127 +1,400 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd -P)"
 TEMPORARY_DIRECTORY="$(mktemp -d)"
-FAKE_STARTER="${TEMPORARY_DIRECTORY}/starter"
-CALL_LOG="${TEMPORARY_DIRECTORY}/calls.log"
-OUTPUT_LOG="${TEMPORARY_DIRECTORY}/output.log"
-SECRET_TOKEN='semantic-uat-token'
+FAKE_STARTER="$TEMPORARY_DIRECTORY/starter"
+CALL_LOG="$TEMPORARY_DIRECTORY/calls.log"
+REQUEST_LOG="$TEMPORARY_DIRECTORY/requests.log"
+STATE_FILE="$TEMPORARY_DIRECTORY/state"
+OUTPUT_LOG="$TEMPORARY_DIRECTORY/output.log"
 SECRET_KEY='google-uat-key'
+SECRET_TOKEN='semantic-uat-token'
+SESSION_ID='0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86'
 
-cleanup() { rm -rf "${TEMPORARY_DIRECTORY}"; }
+cleanup() { rm -rf "$TEMPORARY_DIRECTORY"; }
 trap cleanup EXIT
 
-[[ -x "${ROOT}/runtime-uat.sh" ]] || { printf 'runtime-uat.sh is missing\n' >&2; exit 1; }
-mkdir -p "${FAKE_STARTER}/.runtime/sources/session-agent-runtime" "${FAKE_STARTER}/bin"
-cp "${ROOT}/runtime-uat.sh" "${FAKE_STARTER}/runtime-uat.sh"
-cat > "${FAKE_STARTER}/.env" <<EOF
-GOOGLE_API_KEY=${SECRET_KEY}
+[[ -x "$ROOT/runtime-uat.sh" ]] || { printf 'runtime-uat.sh is missing\n' >&2; exit 1; }
+mkdir -p "$FAKE_STARTER/bin"
+cp "$ROOT/runtime-uat.sh" "$FAKE_STARTER/runtime-uat.sh"
+cat > "$FAKE_STARTER/.env" <<EOF
+GOOGLE_API_KEY=
 GOOGLE_GENAI_MODEL=contract-model
 SESSION_AGENT_HOST_PORT=18090
-SEMANTIC_QUERY_API_TOKEN=${SECRET_TOKEN}
+SEMANTIC_QUERY_API_TOKEN=$SECRET_TOKEN
 SEMANTIC_HOST_PORT=18080
 EOF
 
-cp "${ROOT}/deploy.sh" "${FAKE_STARTER}/deploy.sh"
-chmod +x "${FAKE_STARTER}/deploy.sh"
-
-cat > "${FAKE_STARTER}/semantic-index-uat.sh" <<EOF
+cat > "$FAKE_STARTER/deploy.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+with_deploy_lock() (
+    local lock_fd
+    mkdir -p "__STARTER__/.runtime"
+    exec {lock_fd}>"__STARTER__/.runtime/deploy.lock"
+    flock -n "$lock_fd"
+    "$@"
+)
+EOF
+sed -i "s|__STARTER__|$FAKE_STARTER|g" "$FAKE_STARTER/deploy.sh"
+
+cat > "$FAKE_STARTER/cross-service-uat.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source "__STARTER__/deploy.sh"
 assert_outer_lock() {
-    if flock -n '${FAKE_STARTER}/.runtime/deploy.lock' true; then
-        printf 'semantic phase ran outside the Runtime outer lock\n' >&2
+    if flock -n "__STARTER__/.runtime/deploy.lock" true; then
+        printf 'cross-service workflow ran outside the Runtime outer lock\n' >&2
         exit 1
     fi
 }
-semantic_uat_deploy_initial_r1_impl() {
+cross_service_uat_impl() {
     assert_outer_lock
-    touch '${FAKE_STARTER}/.runtime/sources/session-agent-runtime/pom.xml'
-    printf 'semantic:r1\n' >> '${CALL_LOG}'
+    COMPOSE=(docker compose --project-name java-agent-uat --env-file "__STARTER__/.env" -f "__STARTER__/compose.yaml")
+    printf 'cross-service:offline-stage\n' >> "__CALL_LOG__"
+    if [[ "$(printenv FAKE_OFFLINE_WORKFLOW_FAIL || true)" == true ]]; then
+        false
+    fi
+    printf 'cross-service:complete\n' >> "__CALL_LOG__"
+    cat > "__STARTER__/deployment-record.txt" <<RECORD
+deployment timestamp: 2026-09-03T00:00:00+00:00
+Session Agent source SHA: runtime-sha
+Semantic source SHA: semantic-sha
+Starter source SHA: starter-sha
+RECORD
 }
-semantic_uat_cold_r1_and_rebuild_impl() { assert_outer_lock; printf 'semantic:cold-r1\n' >> '${CALL_LOG}'; }
-semantic_uat_gated_payment_transition_impl() {
+wait_for_runtime_health() {
     assert_outer_lock
-    [[ "\$1" == session || "\$1" == repeat ]]
-    printf 'semantic:r2:%s\n' "\$1" >> '${CALL_LOG}'
+    [[ "$1" == 18090 ]]
+    printf 'runtime-health:ready\n' >> "__CALL_LOG__"
 }
-semantic_uat_reset_payment_to_v1_impl() { assert_outer_lock; printf 'semantic:reset\n' >> '${CALL_LOG}'; }
-evidence() { assert_outer_lock; printf 'evidence:%s\n' "\$*" >> '${CALL_LOG}'; }
-semantic_index_uat_main() { printf 'nested semantic main\n' >&2; exit 1; }
+wait_for_semantic_catalog() {
+    assert_outer_lock
+    [[ "$1" == 18090 ]]
+    printf 'semantic-catalog:available\n' >> "__CALL_LOG__"
+}
 EOF
-chmod +x "${FAKE_STARTER}/semantic-index-uat.sh"
+sed -i -e "s|__STARTER__|$FAKE_STARTER|g" -e "s|__CALL_LOG__|$CALL_LOG|g" "$FAKE_STARTER/cross-service-uat.sh"
 
-cat > "${FAKE_STARTER}/bin/mvn" <<EOF
+cat > "$FAKE_STARTER/bin/docker" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "\$#" -eq 7 && "\$1" == '-q' && "\$2" == '-f' ]]
-[[ "\$3" == '${FAKE_STARTER}/.runtime/sources/session-agent-runtime/pom.xml' ]]
-[[ "\$4" == '-Plive-it' ]]
-[[ "\$5" == '-DfailIfNoTests=true' ]]
-[[ "\$7" == test ]]
-[[ "\${SESSION_AGENT_LIVE}" == true ]]
-[[ "\${SESSION_AGENT_BASE_URL}" == 'http://127.0.0.1:18090' ]]
-[[ -n "\${SESSION_AGENT_HISTORY_KEY}" ]]
-[[ -z "\${SEMANTIC_BASE_URL:-}" && -z "\${SEMANTIC_API_TOKEN:-}" ]]
-[[ "\${GOOGLE_API_KEY}" == '${SECRET_KEY}' && "\${GOOGLE_GENAI_MODEL}" == contract-model ]]
-if flock -n '${FAKE_STARTER}/.runtime/deploy.lock' true; then
-    printf 'live acceptance released the deployment lock before Maven finished\n' >&2
+FAKE_RUNTIME_FAIL_STAGE="$(printenv FAKE_RUNTIME_FAIL_STAGE || true)"
+if flock -n "__STARTER__/.runtime/deploy.lock" true; then
+    printf 'Runtime restart ran outside the Runtime outer lock\n' >&2
     exit 1
 fi
-if [[ "\${RUNTIME_UAT_FAIL_FIRST_MAVEN:-false}" == true ]]; then
-    printf 'mvn:failed:%s\n' "\$6" >> '${CALL_LOG}'
-    exit 23
+printf 'docker:%s\n' "$*" >> "__CALL_LOG__"
+if [[ "$*" == *'up -d --force-recreate --no-deps session-agent-runtime'* ]] && [[ "$FAKE_RUNTIME_FAIL_STAGE" == restart ]]; then
+    exit 41
 fi
-printf 'mvn:%s:%s\n' "\$6" "\${SESSION_AGENT_HISTORY_KEY}" >> '${CALL_LOG}'
 EOF
-chmod +x "${FAKE_STARTER}/bin/mvn"
+sed -i -e "s|__STARTER__|$FAKE_STARTER|g" -e "s|__CALL_LOG__|$CALL_LOG|g" "$FAKE_STARTER/bin/docker"
+chmod +x "$FAKE_STARTER/bin/docker"
 
-if PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/runtime-uat.sh" unexpected > "${OUTPUT_LOG}" 2>&1; then
+cat > "$FAKE_STARTER/bin/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sleep:%s\n' "$*" >> "__CALL_LOG__"
+EOF
+sed -i "s|__CALL_LOG__|$CALL_LOG|g" "$FAKE_STARTER/bin/sleep"
+chmod +x "$FAKE_STARTER/bin/sleep"
+
+cat > "$FAKE_STARTER/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+FAKE_RUNTIME_FAIL_STAGE="$(printenv FAKE_RUNTIME_FAIL_STAGE || true)"
+FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY="$(printenv FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY || true)"
+FAKE_RUNTIME_JOB_1_RETRY="$(printenv FAKE_RUNTIME_JOB_1_RETRY || true)"
+FAKE_RUNTIME_BLANK_SOURCE_CODE="$(printenv FAKE_RUNTIME_BLANK_SOURCE_CODE || true)"
+FAKE_RUNTIME_BLANK_FIRST_ASSISTANT="$(printenv FAKE_RUNTIME_BLANK_FIRST_ASSISTANT || true)"
+FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT="$(printenv FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT || true)"
+FAKE_RUNTIME_REUSED_TOOL_CALL_ID="$(printenv FAKE_RUNTIME_REUSED_TOOL_CALL_ID || true)"
+FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE="$(printenv FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE || true)"
+method=GET
+body=
+url=
+while (( $# > 0 )); do
+    case "$1" in
+        --request|-X) method="$2"; shift 2 ;;
+        --data|--data-raw) body="$2"; shift 2 ;;
+        --header|-H|--connect-timeout|--max-time) shift 2 ;;
+        --fail|--fail-with-body|--silent|--show-error) shift ;;
+        *) url="$1"; shift ;;
+    esac
+done
+case "$url" in
+    http://127.0.0.1:18080/api/v1/repositories)
+        printf 'GET catalog\n' >> "__REQUEST_LOG__"
+        printf '%s\n' '{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}' ;;
+    http://127.0.0.1:18090/actuator/health)
+        printf 'GET health\n' >> "__REQUEST_LOG__"
+        printf '%s\n' '{"status":"UP"}' ;;
+    http://127.0.0.1:18090/actuator/mcpConnections)
+        printf 'GET mcp\n' >> "__REQUEST_LOG__"
+        printf '%s\n' '{"connections":{"semantic":{"state":"AVAILABLE","toolCount":12}}}' ;;
+    http://127.0.0.1:18090/internal/messages)
+        count="$(cat "__STATE_FILE__" 2>/dev/null || printf 0)"
+        count=$((count + 1))
+        printf '%s' "$count" > "__STATE_FILE__"
+        session_key="$(jq -er '.sessionKey' <<< "$body")"
+        source_id="$(jq -er '.sourceMessageId' <<< "$body")"
+        question="$(jq -er '.message' <<< "$body")"
+        [[ -n "$session_key" && -n "$source_id" ]]
+        if (( count == 1 )); then
+            [[ "$question" == '我們目前支援哪些付款方式？請根據程式碼回答。' ]]
+            printf '%s\n' "$session_key" > "__TEMPORARY_DIRECTORY__/session-key"
+            printf '%s\n' "$source_id" > "__TEMPORARY_DIRECTORY__/first-source-id"
+            printf 'POST first-message\n' >> "__REQUEST_LOG__"
+            printf '%s\n' '{"sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","messageJobId":"job-1"}'
+        elif (( count == 2 )); then
+            [[ "$session_key" == "$(< "__TEMPORARY_DIRECTORY__/session-key")" ]]
+            [[ "$source_id" != "$(< "__TEMPORARY_DIRECTORY__/first-source-id")" ]]
+            [[ "$question" == '這些付款方式的手續費能否只看程式碼就確定？若不能，請說明缺少哪類執行期資料。' ]]
+            printf 'POST follow-up\n' >> "__REQUEST_LOG__"
+            printf '%s\n' '{"sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","messageJobId":"job-2"}'
+        else
+            exit 44
+        fi ;;
+    http://127.0.0.1:18090/internal/message-jobs/job-1)
+        [[ "$FAKE_RUNTIME_FAIL_STAGE" != job ]] || exit 42
+        if [[ "$FAKE_RUNTIME_JOB_1_RETRY" == true ]]; then
+            poll_file="__TEMPORARY_DIRECTORY__/job-1-retry-polls"
+            polls=0
+            [[ -f "$poll_file" ]] && polls="$(< "$poll_file")"
+            polls=$((polls + 1))
+            printf '%s' "$polls" > "$poll_file"
+            case "$polls" in
+                1) status=RETRY ;;
+                2) status=WORKING ;;
+                3) status=DONE ;;
+                *) exit 46 ;;
+            esac
+            printf 'GET job-1:%s\n' "$status" >> "__REQUEST_LOG__"
+            jq -cn --arg status "$status" '{messageJobId:"job-1",sessionId:"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86",status:$status}'
+        else
+            printf 'GET job-1\n' >> "__REQUEST_LOG__"
+            printf '%s\n' '{"messageJobId":"job-1","sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","status":"DONE"}'
+        fi ;;
+    http://127.0.0.1:18090/internal/message-jobs/job-2)
+        printf 'GET job-2\n' >> "__REQUEST_LOG__"
+        printf '%s\n' '{"messageJobId":"job-2","sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","status":"DONE"}' ;;
+    http://127.0.0.1:18090/internal/sessions/0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86/messages)
+        [[ "$FAKE_RUNTIME_FAIL_STAGE" != history ]] || exit 43
+        count="$(cat "__STATE_FILE__" 2>/dev/null || printf 0)"
+        printf 'GET history-%s\n' "$count" >> "__REQUEST_LOG__"
+        if (( count <= 1 )) || [[ "$FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY" == true ]]; then
+            cat <<'JSON' | jq --arg blank_source "$FAKE_RUNTIME_BLANK_SOURCE_CODE" \
+                --arg blank_first_assistant "$FAKE_RUNTIME_BLANK_FIRST_ASSISTANT" \
+                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" \
+                --arg reused_tool_call_id "$FAKE_RUNTIME_REUSED_TOOL_CALL_ID" \
+                --arg independent_source_evidence "$FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE" '
+                map(
+                    if $independent_source_evidence == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls += [{toolCallId:"other-source-call",toolName:"semantic_search_code",arguments:{repositoryId:"order-service",revision:"order-revision-7",query:"payment methods"}}]
+                    elif $independent_source_evidence == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .output = {isError:true,result:{code:"TOOL_CONNECTION_FAILED"}}
+                    elif $reused_tool_call_id == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls |= map(if .toolCallId == "source-call" then .toolCallId = "catalog-call" else . end)
+                    elif $reused_tool_call_id == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .toolCallId = "catalog-call"
+                    elif $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
+                        .output.result.items[0].source.code = " \t "
+                    elif $blank_first_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-1" then
+                        .message = " \t "
+                    elif $blank_follow_up_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-2" then
+                        .message = " \t "
+                    else .
+                    end
+                )
+                | if $independent_source_evidence == "true" then
+                    .[0:4] + [{sequence:99,type:"TOOL",messageJobId:"job-1",toolCallId:"other-source-call",toolName:"semantic_search_code",output:{isError:false,result:{repositoryId:"order-service",revision:"order-revision-7",items:[{source:{code:"public OrderPaymentMethod supported() { return CARD; }"}}]}}}] + .[4:]
+                  else .
+                  end
+'
+[{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"}]
+JSON
+        else
+            cat <<'JSON' | jq --arg blank_source "$FAKE_RUNTIME_BLANK_SOURCE_CODE" \
+                --arg blank_first_assistant "$FAKE_RUNTIME_BLANK_FIRST_ASSISTANT" \
+                --arg blank_follow_up_assistant "$FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT" \
+                --arg reused_tool_call_id "$FAKE_RUNTIME_REUSED_TOOL_CALL_ID" \
+                --arg independent_source_evidence "$FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE" '
+                map(
+                    if $independent_source_evidence == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls += [{toolCallId:"other-source-call",toolName:"semantic_search_code",arguments:{repositoryId:"order-service",revision:"order-revision-7",query:"payment methods"}}]
+                    elif $independent_source_evidence == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .output = {isError:true,result:{code:"TOOL_CONNECTION_FAILED"}}
+                    elif $reused_tool_call_id == "true" and .type == "ASSISTANT_TOOL_CALLS" then
+                        .calls |= map(if .toolCallId == "source-call" then .toolCallId = "catalog-call" else . end)
+                    elif $reused_tool_call_id == "true" and .type == "TOOL" and .toolCallId == "source-call" then
+                        .toolCallId = "catalog-call"
+                    elif $blank_source == "true" and .type == "TOOL" and .toolName == "semantic_search_code" then
+                        .output.result.items[0].source.code = " \t "
+                    elif $blank_first_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-1" then
+                        .message = " \t "
+                    elif $blank_follow_up_assistant == "true" and .type == "ASSISTANT" and .messageJobId == "job-2" then
+                        .message = " \t "
+                    else .
+                    end
+                )
+                | if $independent_source_evidence == "true" then
+                    .[0:4] + [{sequence:99,type:"TOOL",messageJobId:"job-1",toolCallId:"other-source-call",toolName:"semantic_search_code",output:{isError:false,result:{repositoryId:"order-service",revision:"order-revision-7",items:[{source:{code:"public OrderPaymentMethod supported() { return CARD; }"}}]}}}] + .[4:]
+                  else .
+                  end
+'
+[{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"},{"sequence":6,"type":"USER","messageJobId":"job-2","participantId":"live-uat","message":"這些付款方式的手續費能否只看程式碼就確定？若不能，請說明缺少哪類執行期資料。"},{"sequence":7,"type":"ASSISTANT","messageJobId":"job-2","message":"無法僅由程式碼確定；還需要目前的費率設定。"}]
+JSON
+        fi ;;
+    *) printf 'unexpected curl request: %s %s\n' "$method" "$url" >&2; exit 45 ;;
+esac
+EOF
+sed -i -e "s|__REQUEST_LOG__|$REQUEST_LOG|g" -e "s|__STATE_FILE__|$STATE_FILE|g" \
+    -e "s|__TEMPORARY_DIRECTORY__|$TEMPORARY_DIRECTORY|g" "$FAKE_STARTER/bin/curl"
+chmod +x "$FAKE_STARTER/bin/curl"
+
+run_runtime() { PATH="$FAKE_STARTER/bin:$PATH" "$@" "$FAKE_STARTER/runtime-uat.sh"; }
+
+if SESSION_AGENT_LIVE=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted a blank configured model credential\n' >&2
+    exit 1
+fi
+[[ ! -e "$CALL_LOG" ]] || { printf 'runtime UAT deployed with a blank model credential\n' >&2; exit 1; }
+
+sed -i "s/^GOOGLE_API_KEY=$/GOOGLE_API_KEY=$SECRET_KEY/" "$FAKE_STARTER/.env"
+sed -i "s/^GOOGLE_API_KEY=$SECRET_KEY$/GOOGLE_API_KEY=   /" "$FAKE_STARTER/.env"
+if SESSION_AGENT_LIVE=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted a whitespace-only configured model credential\n' >&2
+    exit 1
+fi
+[[ ! -e "$CALL_LOG" ]] || { printf 'runtime UAT deployed with a whitespace-only model credential\n' >&2; exit 1; }
+sed -i 's/^GOOGLE_API_KEY=   $/GOOGLE_API_KEY=google-uat-key/' "$FAKE_STARTER/.env"
+if run_runtime env -u SESSION_AGENT_LIVE > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT silently opted in without exported SESSION_AGENT_LIVE=true\n' >&2
+    exit 1
+fi
+if SESSION_AGENT_LIVE=false run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted SESSION_AGENT_LIVE=false\n' >&2
+    exit 1
+fi
+if SESSION_AGENT_LIVE=true PATH="$FAKE_STARTER/bin:$PATH" "$FAKE_STARTER/runtime-uat.sh" unexpected > "$OUTPUT_LOG" 2>&1; then
     printf 'runtime UAT accepted a positional argument\n' >&2
     exit 1
 fi
-grep -Fq 'usage: ./runtime-uat.sh' "${OUTPUT_LOG}"
-[[ ! -e "${CALL_LOG}" ]] || { printf 'runtime UAT ran before rejecting an argument\n' >&2; exit 1; }
+[[ ! -e "$CALL_LOG" ]] || { printf 'runtime UAT mutated before its opt-in checks\n' >&2; exit 1; }
 
-(
-    exec 9>"${FAKE_STARTER}/.runtime/deploy.lock"
-    flock -n 9
-    touch "${FAKE_STARTER}/lock-ready"
-    sleep 1
-) &
-LOCK_HOLDER_PID=$!
-while [[ ! -e "${FAKE_STARTER}/lock-ready" ]]; do sleep 0.01; done
-if PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/runtime-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
-    printf 'runtime UAT bypassed the deployment lock\n' >&2
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_OFFLINE_WORKFLOW_FAIL=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted a failed offline workflow\n' >&2
     exit 1
 fi
-[[ ! -e "${CALL_LOG}" ]] || { printf 'runtime UAT mutated while the lock was held\n' >&2; exit 1; }
-wait "${LOCK_HOLDER_PID}"
+grep -Fq 'runtime-uat: offline cross-service deployment failed' "$OUTPUT_LOG"
+grep -Fxq 'cross-service:offline-stage' "$CALL_LOG"
+! grep -Fq 'cross-service:complete' "$CALL_LOG"
+[[ ! -e "$REQUEST_LOG" ]]
+! grep -Fq 'docker:' "$CALL_LOG"
 
-if RUNTIME_UAT_FAIL_FIRST_MAVEN=true PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/runtime-uat.sh" > "${OUTPUT_LOG}" 2>&1; then
-    printf 'runtime UAT returned success after its first Maven phase failed\n' >&2
+rm -rf "$FAKE_STARTER/.runtime/evidence/session-mcp-live"
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+SESSION_AGENT_LIVE=true run_runtime env > "$OUTPUT_LOG" 2>&1
+
+grep -Fxq 'cross-service:complete' "$CALL_LOG"
+grep -Fxq 'runtime-health:ready' "$CALL_LOG"
+grep -Fxq 'semantic-catalog:available' "$CALL_LOG"
+grep -Fq 'up -d --force-recreate --no-deps session-agent-runtime' "$CALL_LOG"
+[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 2 ]]
+grep -Fxq 'POST first-message' "$REQUEST_LOG"
+grep -Fxq 'POST follow-up' "$REQUEST_LOG"
+grep -Fxq 'GET job-1' "$REQUEST_LOG"
+grep -Fxq 'GET job-2' "$REQUEST_LOG"
+[[ "$(grep -Fc 'GET history-' "$REQUEST_LOG")" -ge 3 ]]
+
+EVIDENCE_DIRECTORY="$(find "$FAKE_STARTER/.runtime/evidence/session-mcp-live" -mindepth 1 -maxdepth 1 -type d)"
+[[ -n "$EVIDENCE_DIRECTORY" ]]
+for evidence_file in deployment-record.txt session.json first-job.json second-job.json first-history.json final-history.json structural-report.txt; do
+    [[ -f "$EVIDENCE_DIRECTORY/$evidence_file" ]] || { printf 'missing evidence file: %s\n' "$evidence_file" >&2; exit 1; }
+    [[ "$(stat -c '%a' "$EVIDENCE_DIRECTORY/$evidence_file")" == 600 ]]
+done
+jq -e --arg session_id "$SESSION_ID" '.sessionId == $session_id and .sessionKey != "" and .firstJobId == "job-1" and .secondJobId == "job-2"' "$EVIDENCE_DIRECTORY/session.json" >/dev/null
+jq -e 'length == 5 and .[1].type == "ASSISTANT_TOOL_CALLS" and .[3].output.isError == false and .[4].type == "ASSISTANT"' "$EVIDENCE_DIRECTORY/first-history.json" >/dev/null
+jq -e --slurpfile first "$EVIDENCE_DIRECTORY/first-history.json" 'length == 7 and .[5].type == "USER" and .[6].type == "ASSISTANT" and (.[:5] == $first[0])' "$EVIDENCE_DIRECTORY/final-history.json" >/dev/null
+grep -Fq 'result=pass' "$EVIDENCE_DIRECTORY/structural-report.txt"
+! grep -R -Fq "$SECRET_KEY" "$EVIDENCE_DIRECTORY"
+! grep -R -Fq "$SECRET_TOKEN" "$EVIDENCE_DIRECTORY"
+! grep -Fq "$SECRET_KEY" "$OUTPUT_LOG"
+! grep -Fq "$SECRET_TOKEN" "$OUTPUT_LOG"
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_REUSED_TOOL_CALL_ID=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted tool call ID reuse across tool names\n' >&2
     exit 1
 fi
-[[ "$(<"${CALL_LOG}")" == 'semantic:r1
-mvn:failed:-Dtest=SessionAgentLiveIT' ]] || {
-    printf 'runtime UAT continued after the first Maven phase failed\n' >&2
-    cat "${CALL_LOG}" >&2
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_INDEPENDENT_SOURCE_EVIDENCE=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted unpaired payment source evidence\n' >&2
     exit 1
-}
-: > "${CALL_LOG}"
+fi
 
-SEMANTIC_BASE_URL='http://stale-semantic.invalid' SEMANTIC_API_TOKEN="${SECRET_TOKEN}" \
-    PATH="${FAKE_STARTER}/bin:${PATH}" "${FAKE_STARTER}/runtime-uat.sh" > "${OUTPUT_LOG}" 2>&1
+for blank_case in source first-assistant follow-up-assistant; do
+    rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+    case "$blank_case" in
+        source) blank_environment=FAKE_RUNTIME_BLANK_SOURCE_CODE ;;
+        first-assistant) blank_environment=FAKE_RUNTIME_BLANK_FIRST_ASSISTANT ;;
+        follow-up-assistant) blank_environment=FAKE_RUNTIME_BLANK_FOLLOW_UP_ASSISTANT ;;
+    esac
+    if (
+        export SESSION_AGENT_LIVE=true
+        export "$blank_environment=true"
+        run_runtime env > "$OUTPUT_LOG" 2>&1
+    ); then
+        printf 'runtime UAT accepted whitespace-only %s content\n' "$blank_case" >&2
+        exit 1
+    fi
+done
 
-mapfile -t CALLS < "${CALL_LOG}"
-[[ "${CALLS[0]}" == semantic:r1 ]]
-[[ "${CALLS[1]}" == mvn:-Dtest=SessionAgentLiveIT:* ]]
-[[ "${CALLS[2]}" == semantic:cold-r1 ]]
-[[ "${CALLS[3]}" == semantic:r2:session ]]
-[[ "${CALLS[4]}" == semantic:reset ]]
-[[ "${CALLS[5]}" == semantic:r2:repeat ]]
-[[ "${CALLS[6]}" == evidence:runtime-uat=complete ]]
-[[ "${#CALLS[@]}" -eq 7 ]]
-! grep -Fq "${SECRET_TOKEN}" "${OUTPUT_LOG}"
-! grep -Fq "${SECRET_KEY}" "${OUTPUT_LOG}"
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG" "$TEMPORARY_DIRECTORY/job-1-retry-polls"
+if ! SESSION_AGENT_LIVE=true FAKE_RUNTIME_JOB_1_RETRY=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT did not poll RETRY message jobs to completion\n' >&2
+    exit 1
+fi
+grep -Fxq 'GET job-1:RETRY' "$REQUEST_LOG"
+grep -Fxq 'GET job-1:WORKING' "$REQUEST_LOG"
+grep -Fxq 'GET job-1:DONE' "$REQUEST_LOG"
+[[ "$(< "$TEMPORARY_DIRECTORY/job-1-retry-polls")" == 3 ]]
+[[ "$(grep -Fc 'sleep:1' "$CALL_LOG")" == 2 ]]
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_UNCHANGED_FOLLOW_UP_HISTORY=true run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT accepted unchanged history after the follow-up job completed\n' >&2
+    exit 1
+fi
+[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 2 ]]
+grep -Fxq 'POST follow-up' "$REQUEST_LOG"
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_FAIL_STAGE=job run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT continued after a failed first job request\n' >&2
+    exit 1
+fi
+[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 1 ]]
+! grep -Fq 'docker:' "$CALL_LOG"
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_FAIL_STAGE=history run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT continued after a failed first history request\n' >&2
+    exit 1
+fi
+[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 1 ]]
+! grep -Fq 'docker:' "$CALL_LOG"
+
+rm -f "$STATE_FILE" "$CALL_LOG" "$REQUEST_LOG"
+if SESSION_AGENT_LIVE=true FAKE_RUNTIME_FAIL_STAGE=restart run_runtime env > "$OUTPUT_LOG" 2>&1; then
+    printf 'runtime UAT continued after Runtime recreation failed\n' >&2
+    exit 1
+fi
+[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 1 ]]
+grep -Fq 'docker:' "$CALL_LOG"
+
+printf 'runtime-uat-test: PASS\n'

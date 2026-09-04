@@ -3,6 +3,7 @@
 .worktrees/
 # Deterministic local UAT remotes are generated beneath .runtime/uat-git.
 .runtime/uat-git/
+.runtime/evidence/cross-service-mcp/
 backups/
 data/
 deployment-record.txt

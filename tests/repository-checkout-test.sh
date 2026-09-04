@@ -21,7 +21,12 @@ curl() {
 }
 
 repository_main list
-[[ "${CURL_ARGUMENTS[*]}" == *'X-Api-Token: read-token'* && "${CURL_ARGUMENTS[*]}" == *'127.0.0.1:18080/v1/repositories'* ]]
+[[ "${CURL_ARGUMENTS[*]}" == *'X-Api-Token: read-token'* && "${CURL_ARGUMENTS[*]}" == *'127.0.0.1:18080/api/v1/repositories'* ]]
+[[ "${CURL_ARGUMENTS[*]}" == *'--request GET'* ]]
+
+repository_main revision payment-service
+[[ "${CURL_ARGUMENTS[*]}" == *'X-Api-Token: read-token'* && "${CURL_ARGUMENTS[*]}" == *'127.0.0.1:18080/api/v1/repositories/payment-service'* ]]
+[[ "${CURL_ARGUMENTS[*]}" == *'--request GET'* ]]
 
 mkfifo "${TEMPORARY_DIRECTORY}/lock-release"
 (

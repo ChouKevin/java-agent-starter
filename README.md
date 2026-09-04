@@ -52,28 +52,32 @@ The source fixture files belong to Semantic under `semantic-indexer/fixtures/uat
 
 `prepare` creates payment, order, and video remotes with stable `v1` tags; payment also has `v2`. `use` changes only the selected remote's `main` ref. `reset` changes that repository back to peeled `v1`, submits a UAT `RESET` job, republishes it, and checks the exact revision. Fixture commands validate their repository/tag arguments and stay inside `.runtime/uat-git`.
 
-## Live acceptance
+## Acceptance
 
-Run the full functional proof with:
+Run the clean cross-service proof without calling a model:
 
 ```bash
-./runtime-uat.sh
+./cross-service-uat.sh
 ```
 
-One outer lock covers the whole run. The script:
+One outer lock covers the whole run. It resets the disposable stack, publishes the exact payment, order, and video fixture revisions, and records the three source SHAs in `deployment-record.txt`. It then proves that Runtime starts while Semantic is unavailable, discovers Semantic later without a Runtime restart, and can use the authenticated Semantic `/api/v1` and `/mcp` contracts. Semantic Query remains Mongo-only; the focused deployed and fake-backed tests do not call a model.
 
-1. exports the `uat` Semantic profile and performs a clean `deploy.sh reset`;
-2. publishes payment, order, and video at exact `v1` commits;
-3. records a repository catalog in one persisted Session conversation;
-4. stops Indexer and exercises every Query tool family from MongoDB;
-5. rebuilds payment at the same revision;
-6. pauses payment `v2` before publication, proves `v1` stays visible, releases it, and checks exact `v2` plus typed `REVISION_OUTDATED` feedback for `v1`;
-7. lets the model retry with `v2` in the same conversation and runs five business scenarios plus two Runtime contract scenarios;
-8. resets payment to `v1` without changing order or video, then repeats the full `v1` to `v2` transition.
+Run the real-model proof only when it is explicitly wanted and `.env` contains `GOOGLE_API_KEY`:
 
-The five business scenarios cover payment methods, a runtime-only fee value, video formats, behavior absent from code, and an order cancellation flow whose refund behavior is not proven. Two additional Runtime scenarios verify model-selected recovery from an outdated revision and complete same-session history on a follow-up question.
+```bash
+SESSION_AGENT_LIVE=true ./runtime-uat.sh
+```
 
-Semantic evidence is under `.runtime/evidence/semantic-git-uat/`. The Session safe live report is under `.runtime/sources/session-agent-runtime/target/live-reports/`. Evidence contains IDs, revisions, generation IDs, state, tool order, outcomes, and available usage only. It must not contain credentials, source payloads, questions, prompts, raw model context, HTTP bodies, or full tool results.
+The live script first completes the offline proof. It then asks for payment methods using indexed source, checks that every model tool call has one matching result, and requires a nonblank final reply. After recreating Runtime, it verifies that the exact session history is still present and asks a same-session follow-up about fee data that cannot be determined from source alone. The final reply is not restricted to a Runtime-owned JSON schema.
+
+Inspect the persisted public conversation with the session ID recorded by the run:
+
+```bash
+curl --fail --silent \
+  http://127.0.0.1:8090/internal/sessions/<session-id>/messages | jq
+```
+
+Offline stage evidence is under `.runtime/evidence/cross-service-mcp/<run-id>/`; a failed run records `failure.txt`, `stages.log`, component logs, the MCP connection state, and the deployment record there. Semantic fixture evidence is copied below that run when available. Live evidence is under `.runtime/evidence/session-mcp-live/<run-id>/` and includes session/job metadata, first/final public history, and a structural report. Live evidence can contain user, model, source, and tool-result content; keep it local and never commit it or credentials.
 
 ## Add a repository
 
