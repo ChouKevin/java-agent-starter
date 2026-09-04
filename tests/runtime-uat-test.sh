@@ -154,6 +154,18 @@ case "$url" in
             [[ "$question" == '這些付款方式的手續費能否只看程式碼就確定？若不能，請說明缺少哪類執行期資料。' ]]
             printf 'POST follow-up\n' >> "__REQUEST_LOG__"
             printf '%s\n' '{"sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","messageJobId":"job-2"}'
+        elif (( count == 3 )); then
+            [[ "$question" == '目前是否支援 Apple Pay？請根據程式碼查詢；若找不到，請明確回答「未找到程式碼證據」。' ]]
+            printf 'POST unsupported-business\n' >> "__REQUEST_LOG__"
+            printf '%s\n' '{"sessionId":"11111111-1111-4111-8111-111111111111","messageJobId":"job-unsupported-business"}'
+        elif (( count == 4 )); then
+            [[ "$question" == '目前每種付款方式的實際手續費是多少？請先查程式碼；如果程式碼不足以確定，請明確回答「需要執行期資料」。' ]]
+            printf 'POST runtime-data\n' >> "__REQUEST_LOG__"
+            printf '%s\n' '{"sessionId":"22222222-2222-4222-8222-222222222222","messageJobId":"job-runtime-data"}'
+        elif (( count == 5 )); then
+            [[ "$question" == '請根據程式碼列出目前支援的付款方式，最後只回傳 JSON 陣列，例如 ["CREDIT_CARD"]，不要加上 Markdown 或固定欄位。' ]]
+            printf 'POST json-reply\n' >> "__REQUEST_LOG__"
+            printf '%s\n' '{"sessionId":"33333333-3333-4333-8333-333333333333","messageJobId":"job-json-reply"}'
         else
             exit 44
         fi ;;
@@ -180,6 +192,15 @@ case "$url" in
     http://127.0.0.1:18090/internal/message-jobs/job-2)
         printf 'GET job-2\n' >> "__REQUEST_LOG__"
         printf '%s\n' '{"messageJobId":"job-2","sessionId":"0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86","status":"DONE"}' ;;
+    http://127.0.0.1:18090/internal/message-jobs/job-unsupported-business)
+        printf 'GET job-unsupported-business\n' >> "__REQUEST_LOG__"
+        printf '%s\n' '{"messageJobId":"job-unsupported-business","sessionId":"11111111-1111-4111-8111-111111111111","status":"DONE","retryCount":0,"modelCallCount":3}' ;;
+    http://127.0.0.1:18090/internal/message-jobs/job-runtime-data)
+        printf 'GET job-runtime-data\n' >> "__REQUEST_LOG__"
+        printf '%s\n' '{"messageJobId":"job-runtime-data","sessionId":"22222222-2222-4222-8222-222222222222","status":"DONE","retryCount":0,"modelCallCount":3}' ;;
+    http://127.0.0.1:18090/internal/message-jobs/job-json-reply)
+        printf 'GET job-json-reply\n' >> "__REQUEST_LOG__"
+        printf '%s\n' '{"messageJobId":"job-json-reply","sessionId":"33333333-3333-4333-8333-333333333333","status":"DONE","retryCount":0,"modelCallCount":3}' ;;
     http://127.0.0.1:18090/internal/sessions/0d7c5b64-0a67-48a4-aaf9-0e7f5b3a1f86/messages)
         [[ "$FAKE_RUNTIME_FAIL_STAGE" != history ]] || exit 43
         count="$(cat "__STATE_FILE__" 2>/dev/null || printf 0)"
@@ -247,6 +268,24 @@ JSON
 [{"sequence":1,"type":"USER","messageJobId":"job-1","participantId":"live-uat","message":"我們目前支援哪些付款方式？請根據程式碼回答。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-1","calls":[{"toolCallId":"catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"source-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment methods"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-1","toolCallId":"catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"},{"repositoryId":"order-service","revision":"order-revision-7"}]}}},{"sequence":4,"type":"TOOL","messageJobId":"job-1","toolCallId":"source-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public PaymentMethod supported() { return CARD; }"}}]}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-1","message":"程式碼顯示可用付款方式。"},{"sequence":6,"type":"USER","messageJobId":"job-2","participantId":"live-uat","message":"這些付款方式的手續費能否只看程式碼就確定？若不能，請說明缺少哪類執行期資料。"},{"sequence":7,"type":"ASSISTANT","messageJobId":"job-2","message":"無法僅由程式碼確定；還需要目前的費率設定。"}]
 JSON
         fi ;;
+    http://127.0.0.1:18090/internal/sessions/11111111-1111-4111-8111-111111111111/messages)
+        printf 'GET history-unsupported-business\n' >> "__REQUEST_LOG__"
+        cat <<'JSON'
+[{"sequence":1,"type":"USER","messageJobId":"job-unsupported-business","participantId":"live-uat","message":"目前是否支援 Apple Pay？請根據程式碼查詢；若找不到，請明確回答「未找到程式碼證據」。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-unsupported-business","calls":[{"toolCallId":"unsupported-catalog-call","toolName":"semantic_list_repositories","arguments":{}},{"toolCallId":"unsupported-search-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"Apple Pay"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-unsupported-business","toolCallId":"unsupported-catalog-call","toolName":"semantic_list_repositories","output":{"isError":false,"result":{"items":[{"repositoryId":"payment-service","revision":"payment-revision-42"}]} }},{"sequence":4,"type":"TOOL","messageJobId":"job-unsupported-business","toolCallId":"unsupported-search-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[],"page":{"hasMore":false}}}},{"sequence":5,"type":"ASSISTANT","messageJobId":"job-unsupported-business","message":"未找到程式碼證據，無法確認目前支援 Apple Pay。"}]
+JSON
+        ;;
+    http://127.0.0.1:18090/internal/sessions/22222222-2222-4222-8222-222222222222/messages)
+        printf 'GET history-runtime-data\n' >> "__REQUEST_LOG__"
+        cat <<'JSON'
+[{"sequence":1,"type":"USER","messageJobId":"job-runtime-data","participantId":"live-uat","message":"目前每種付款方式的實際手續費是多少？請先查程式碼；如果程式碼不足以確定，請明確回答「需要執行期資料」。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-runtime-data","calls":[{"toolCallId":"runtime-data-search-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"payment fee formula"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-runtime-data","toolCallId":"runtime-data-search-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"String formulaJson = settings.loadRuntimeFeeFormulaJson(paymentMethod);"}}]}}},{"sequence":4,"type":"ASSISTANT","messageJobId":"job-runtime-data","message":"無法只看程式碼得知實際手續費，需要執行期資料。"}]
+JSON
+        ;;
+    http://127.0.0.1:18090/internal/sessions/33333333-3333-4333-8333-333333333333/messages)
+        printf 'GET history-json-reply\n' >> "__REQUEST_LOG__"
+        cat <<'JSON'
+[{"sequence":1,"type":"USER","messageJobId":"job-json-reply","participantId":"live-uat","message":"請根據程式碼列出目前支援的付款方式，最後只回傳 JSON 陣列，例如 [\"CREDIT_CARD\"]，不要加上 Markdown 或固定欄位。"},{"sequence":2,"type":"ASSISTANT_TOOL_CALLS","messageJobId":"job-json-reply","calls":[{"toolCallId":"json-search-call","toolName":"semantic_search_code","arguments":{"repositoryId":"payment-service","revision":"payment-revision-42","query":"PaymentMethod"}}]},{"sequence":3,"type":"TOOL","messageJobId":"job-json-reply","toolCallId":"json-search-call","toolName":"semantic_search_code","output":{"isError":false,"result":{"repositoryId":"payment-service","revision":"payment-revision-42","items":[{"source":{"code":"public enum PaymentMethod { CREDIT_CARD, BANK_TRANSFER, WALLET }"}}]}}},{"sequence":4,"type":"ASSISTANT","messageJobId":"job-json-reply","message":"[\"CREDIT_CARD\",\"BANK_TRANSFER\",\"WALLET\"]"}]
+JSON
+        ;;
     *) printf 'unexpected curl request: %s %s\n' "$method" "$url" >&2; exit 45 ;;
 esac
 EOF
@@ -303,11 +342,20 @@ grep -Fxq 'cross-service:complete' "$CALL_LOG"
 grep -Fxq 'runtime-health:ready' "$CALL_LOG"
 grep -Fxq 'semantic-catalog:available' "$CALL_LOG"
 grep -Fq 'up -d --force-recreate --no-deps session-agent-runtime' "$CALL_LOG"
-[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 2 ]]
+[[ "$(grep -Fc 'POST ' "$REQUEST_LOG")" == 5 ]] || {
+    printf 'runtime UAT did not run every configured live case\n' >&2
+    exit 1
+}
 grep -Fxq 'POST first-message' "$REQUEST_LOG"
 grep -Fxq 'POST follow-up' "$REQUEST_LOG"
+grep -Fxq 'POST unsupported-business' "$REQUEST_LOG"
+grep -Fxq 'POST runtime-data' "$REQUEST_LOG"
+grep -Fxq 'POST json-reply' "$REQUEST_LOG"
 grep -Fxq 'GET job-1' "$REQUEST_LOG"
 grep -Fxq 'GET job-2' "$REQUEST_LOG"
+grep -Fxq 'GET job-unsupported-business' "$REQUEST_LOG"
+grep -Fxq 'GET job-runtime-data' "$REQUEST_LOG"
+grep -Fxq 'GET job-json-reply' "$REQUEST_LOG"
 [[ "$(grep -Fc 'GET history-' "$REQUEST_LOG")" -ge 3 ]]
 
 EVIDENCE_DIRECTORY="$(find "$FAKE_STARTER/.runtime/evidence/session-mcp-live" -mindepth 1 -maxdepth 1 -type d)"
@@ -316,9 +364,24 @@ for evidence_file in deployment-record.txt session.json first-job.json second-jo
     [[ -f "$EVIDENCE_DIRECTORY/$evidence_file" ]] || { printf 'missing evidence file: %s\n' "$evidence_file" >&2; exit 1; }
     [[ "$(stat -c '%a' "$EVIDENCE_DIRECTORY/$evidence_file")" == 600 ]]
 done
+for evidence_file in unsupported-business-job.json unsupported-business-history.json; do
+    [[ -f "$EVIDENCE_DIRECTORY/$evidence_file" ]] || { printf 'missing evidence file: %s\n' "$evidence_file" >&2; exit 1; }
+    [[ "$(stat -c '%a' "$EVIDENCE_DIRECTORY/$evidence_file")" == 600 ]]
+done
+for evidence_file in runtime-data-job.json runtime-data-history.json; do
+    [[ -f "$EVIDENCE_DIRECTORY/$evidence_file" ]] || { printf 'missing evidence file: %s\n' "$evidence_file" >&2; exit 1; }
+    [[ "$(stat -c '%a' "$EVIDENCE_DIRECTORY/$evidence_file")" == 600 ]]
+done
+for evidence_file in json-reply-job.json json-reply-history.json; do
+    [[ -f "$EVIDENCE_DIRECTORY/$evidence_file" ]] || { printf 'missing evidence file: %s\n' "$evidence_file" >&2; exit 1; }
+    [[ "$(stat -c '%a' "$EVIDENCE_DIRECTORY/$evidence_file")" == 600 ]]
+done
 jq -e --arg session_id "$SESSION_ID" '.sessionId == $session_id and .sessionKey != "" and .firstJobId == "job-1" and .secondJobId == "job-2"' "$EVIDENCE_DIRECTORY/session.json" >/dev/null
 jq -e 'length == 5 and .[1].type == "ASSISTANT_TOOL_CALLS" and .[3].output.isError == false and .[4].type == "ASSISTANT"' "$EVIDENCE_DIRECTORY/first-history.json" >/dev/null
 jq -e --slurpfile first "$EVIDENCE_DIRECTORY/first-history.json" 'length == 7 and .[5].type == "USER" and .[6].type == "ASSISTANT" and (.[:5] == $first[0])' "$EVIDENCE_DIRECTORY/final-history.json" >/dev/null
+jq -e '.[-1].type == "ASSISTANT" and (.[-1].message | contains("未找到程式碼證據"))' "$EVIDENCE_DIRECTORY/unsupported-business-history.json" >/dev/null
+jq -e '.[-1].type == "ASSISTANT" and (.[-1].message | contains("需要執行期資料"))' "$EVIDENCE_DIRECTORY/runtime-data-history.json" >/dev/null
+jq -e '(.[-1].message | fromjson | sort) == ["BANK_TRANSFER", "CREDIT_CARD", "WALLET"]' "$EVIDENCE_DIRECTORY/json-reply-history.json" >/dev/null
 grep -Fq 'result=pass' "$EVIDENCE_DIRECTORY/structural-report.txt"
 ! grep -R -Fq "$SECRET_KEY" "$EVIDENCE_DIRECTORY"
 ! grep -R -Fq "$SECRET_TOKEN" "$EVIDENCE_DIRECTORY"

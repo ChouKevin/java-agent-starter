@@ -68,7 +68,9 @@ Run the real-model proof only when it is explicitly wanted and `.env` contains `
 SESSION_AGENT_LIVE=true ./runtime-uat.sh
 ```
 
-The live script first completes the offline proof. It then asks for payment methods using indexed source, checks that every model tool call has one matching result, and requires a nonblank final reply. After recreating Runtime, it verifies that the exact session history is still present and asks a same-session follow-up about fee data that cannot be determined from source alone. The final reply is not restricted to a Runtime-owned JSON schema.
+The live script first completes the offline proof. It then asks for payment methods using indexed source, checks that every model tool call has one matching result, and requires a nonblank final reply. After recreating Runtime, it verifies that the exact session history is still present and asks a same-session follow-up about fee data that cannot be determined from source alone.
+
+Three independent sessions then check additional model behavior: an unsupported Apple Pay question must report that no code evidence was found, a direct fee question must identify the missing runtime data after consulting source, and a payment-method question must preserve the model's JSON-array reply as plain assistant text instead of decoding it as a Runtime-owned schema. Each independent case must complete without a job retry and writes its own job and history evidence.
 
 Inspect the persisted public conversation with the session ID recorded by the run:
 
@@ -77,7 +79,7 @@ curl --fail --silent \
   http://127.0.0.1:8090/internal/sessions/<session-id>/messages | jq
 ```
 
-Offline stage evidence is under `.runtime/evidence/cross-service-mcp/<run-id>/`; a failed run records `failure.txt`, `stages.log`, component logs, the MCP connection state, and the deployment record there. Semantic fixture evidence is copied below that run when available. Live evidence is under `.runtime/evidence/session-mcp-live/<run-id>/` and includes session/job metadata, first/final public history, and a structural report. Live evidence can contain user, model, source, and tool-result content; keep it local and never commit it or credentials.
+Offline stage evidence is under `.runtime/evidence/cross-service-mcp/<run-id>/`; a failed run records `failure.txt`, `stages.log`, component logs, the MCP connection state, and the deployment record there. Semantic fixture evidence is copied below that run when available. Live evidence is under `.runtime/evidence/session-mcp-live/<run-id>/` and includes session/job metadata, first/final public history, the three independent case histories, and a structural report. Live evidence can contain user, model, source, and tool-result content; keep it local and never commit it or credentials.
 
 ## Add a repository
 

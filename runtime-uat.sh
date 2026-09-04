@@ -191,6 +191,89 @@ assert_follow_up_history() {
     ' <<< "$final_history" >/dev/null
 }
 
+assert_semantic_case_history() {
+    local history="$1"
+    local job_id="$2"
+    local semantic_revision="$3"
+    local require_code="$4"
+
+    assert_complete_tool_pairing "$history" || return 1
+    jq -e --arg job_id "$job_id" --arg semantic_revision "$semantic_revision" --arg require_code "$require_code" '
+        . as $history
+        | any($history[] | select(.type == "ASSISTANT_TOOL_CALLS" and .messageJobId == $job_id) | .calls[]?;
+            . as $call
+            | $call.toolName == "semantic_search_code"
+            and $call.arguments.repositoryId == "payment-service"
+            and $call.arguments.revision == $semantic_revision
+            and any($history[] | select(.type == "TOOL");
+                .toolCallId == $call.toolCallId
+                and .toolName == $call.toolName
+                and .output.isError == false
+                and ($require_code == "false"
+                    or ([.output | .. | objects | .code? | strings | select(test("[^[:space:]]"))] | length > 0))))
+    ' <<< "$history" >/dev/null
+}
+
+assert_unsupported_business_history() {
+    local history="$1"
+    local job_id="$2"
+
+    assert_semantic_case_history "$history" "$job_id" "$3" false || return 1
+    jq -e --arg job_id "$job_id" '
+        any(.[]; .type == "ASSISTANT" and .messageJobId == $job_id
+            and (.message | contains("未找到程式碼證據")))
+    ' <<< "$history" >/dev/null
+}
+
+assert_runtime_data_history() {
+    local history="$1"
+    local job_id="$2"
+
+    assert_semantic_case_history "$history" "$job_id" "$3" true || return 1
+    jq -e --arg job_id "$job_id" '
+        any(.[]; .type == "ASSISTANT" and .messageJobId == $job_id
+            and (.message | contains("需要執行期資料")))
+    ' <<< "$history" >/dev/null
+}
+
+assert_json_reply_history() {
+    local history="$1"
+    local job_id="$2"
+
+    assert_semantic_case_history "$history" "$job_id" "$3" true || return 1
+    jq -e --arg job_id "$job_id" '
+        ([ .[]
+            | select(.type == "ASSISTANT" and .messageJobId == $job_id)
+            | (.message | fromjson?)
+            | select(type == "array")
+            | sort
+        ] | any(. == ["BANK_TRANSFER", "CREDIT_CARD", "WALLET"]))
+    ' <<< "$history" >/dev/null
+}
+
+run_independent_case() {
+    local name="$1"
+    local message="$2"
+    local semantic_revision="$3"
+    local validator="$4"
+    local receipt session_id job_id job history
+
+    receipt="$(submit_message "session-mcp-live-${name}-$(unique_identifier)" \
+        "session-mcp-live-${name}-$(unique_identifier)" "$message")" \
+        || runtime_uat_fail "$name message submission failed"
+    session_id="$(jq -er '.sessionId | select(type == "string" and length > 0)' <<< "$receipt")" \
+        || runtime_uat_fail "$name receipt has no session id"
+    job_id="$(jq -er '.messageJobId | select(type == "string" and length > 0)' <<< "$receipt")" \
+        || runtime_uat_fail "$name receipt has no job id"
+    job="$(wait_for_done_job "$job_id")" || runtime_uat_fail "$name job failed"
+    jq -e '.retryCount == 0' <<< "$job" >/dev/null || runtime_uat_fail "$name job required a retry"
+    write_live_evidence "${name}-job.json" "$job"
+    history="$(session_history "$session_id")" || runtime_uat_fail "$name session history is unavailable"
+    "$validator" "$history" "$job_id" "$semantic_revision" \
+        || runtime_uat_fail "$name history failed structural validation"
+    write_live_evidence "${name}-history.json" "$history"
+}
+
 run_offline_cross_service_uat() {
     set -E
     trap 'runtime_uat_fail "offline cross-service deployment failed"; exit 1' ERR
@@ -277,6 +360,16 @@ runtime_uat_impl() {
     assert_follow_up_history "$first_history" "$final_history" "$second_job_id" \
         || runtime_uat_fail 'follow-up session history failed structural validation'
     write_live_evidence final-history.json "$final_history"
+
+    run_independent_case unsupported-business \
+        '目前是否支援 Apple Pay？請根據程式碼查詢；若找不到，請明確回答「未找到程式碼證據」。' \
+        "$semantic_revision" assert_unsupported_business_history
+    run_independent_case runtime-data \
+        '目前每種付款方式的實際手續費是多少？請先查程式碼；如果程式碼不足以確定，請明確回答「需要執行期資料」。' \
+        "$semantic_revision" assert_runtime_data_history
+    run_independent_case json-reply \
+        '請根據程式碼列出目前支援的付款方式，最後只回傳 JSON 陣列，例如 ["CREDIT_CARD"]，不要加上 Markdown 或固定欄位。' \
+        "$semantic_revision" assert_json_reply_history
     completed_at="$(date --iso-8601=seconds)"
 
     write_live_evidence session.json "$(record_session_metadata "$session_key" "$session_id" "$first_job_id" "$second_job_id" \
@@ -285,6 +378,9 @@ runtime_uat_impl() {
 semanticRevision=$semantic_revision
 toolHistory=paired
 restart=preserved
+unsupportedBusiness=pass
+runtimeData=pass
+jsonReply=pass
 finalAssistant=nonblank"
 }
 

@@ -12,7 +12,7 @@ Starter must not add Runtime Java source, duplicate Semantic schemas, or impleme
 
 Starter deploys independent Runtime and Semantic source SHAs from `.runtime/sources/` and records the pair in `deployment-record.txt`. Runtime listens on loopback port `8090`; the Semantic Query gateway listens on loopback port `8080`; Indexer admin uses loopback port `8081`. Internal networks keep Runtime away from the Indexer admin path.
 
-`cross-service-uat.sh` is the default no-model proof. It verifies one Indexer, Mongo-only Query, exact Git fixture revisions, authenticated `/api/v1` and `/mcp` access, Runtime startup while Semantic is unavailable, and later MCP discovery without recreating Runtime. `SESSION_AGENT_LIVE=true ./runtime-uat.sh` adds one explicitly authorized model flow: indexed payment source, native paired tool history, Runtime recreation, preserved same-session history, and a follow-up about runtime-only fee data. Local evidence is kept below `.runtime/evidence/` and is not committed.
+`cross-service-uat.sh` is the default no-model proof. It verifies one Indexer, Mongo-only Query, exact Git fixture revisions, authenticated `/api/v1` and `/mcp` access, Runtime startup while Semantic is unavailable, and later MCP discovery without recreating Runtime. `SESSION_AGENT_LIVE=true ./runtime-uat.sh` adds explicitly authorized model flows: indexed payment source, native paired tool history, Runtime recreation, preserved same-session history, runtime-only fee data, unsupported-business honesty, and an unrestricted JSON-array final reply. Local evidence is kept below `.runtime/evidence/` and is not committed.
 
 ## Acceptance rules
 
