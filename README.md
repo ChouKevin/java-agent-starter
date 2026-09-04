@@ -8,6 +8,19 @@ Java Agent Starter runs a single-host UAT stack for three independently owned pa
 
 Starter contains no Session Runtime or Semantic Java source. Cross-service ownership is summarized in [docs/roadmap.md](docs/roadmap.md).
 
+## Repository roles
+
+| Repository | Owns |
+| --- | --- |
+| `java-agent-starter` | Source staging, Compose, fixtures, deployment records, and cross-service UAT |
+| `session-agent-runtime` | Conversation history, model turns, generic MCP tools, and PostgreSQL |
+| `java-code-intelligence` | Offline Java indexing, MongoDB generations, and Semantic HTTP/MCP queries |
+
+Make service changes in the service's own repository. The copies under
+`.runtime/sources/` are generated deployment inputs and may be replaced by any
+deploy; never use them as development worktrees. Repository-specific coding-agent
+rules are in [AGENTS.md](AGENTS.md).
+
 ## Requirements and first start
 
 Install Git, Docker Engine with Compose v2, `jq`, `flock`, Maven, and Java 21. The live script currently uses `/usr/lib/jvm/java-21-openjdk-amd64`. Source Git credentials and a Google GenAI key are required when their configured remotes or live tests need them.
